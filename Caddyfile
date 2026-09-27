@@ -1,0 +1,20 @@
+# TLS termination for grenade-relay. Caddy proxies WebSockets without extra settings
+# and sets X-Forwarded-For, which the relay trusts (GRENADE_RELAY_TRUST_PROXY=1).
+#
+# RELAY_HOST is a DNS name or a public IPv4/IPv6 address. Let's Encrypt issues IP certificates
+# only under its "shortlived" profile (about 6 days; Caddy renews them), so every certificate
+# uses that profile. Clients send no SNI when they dial an IP, and inside Docker Caddy cannot
+# see the public IP, so default_sni tells it which certificate to serve.
+{
+	default_sni {$RELAY_HOST}
+}
+
+{$RELAY_HOST} {
+	tls {
+		issuer acme {
+			profile shortlived
+		}
+	}
+	encode gzip
+	reverse_proxy relay:8787
+}

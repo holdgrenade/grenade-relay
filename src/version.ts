@@ -1,0 +1,5 @@
+/** The relay's version, from package.json. */
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+export const VERSION: string = (require("../package.json") as { version: string }).version;

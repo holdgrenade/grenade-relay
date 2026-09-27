@@ -1,0 +1,110 @@
+import { describe, expect, it } from "vitest";
+import { basicPassword, bearerToken, keyMatches, safeEqual } from "../src/auth.js";
+import { clientIp, normalizeIp } from "../src/clientIp.js";
+import { safeCloseCode, safeCloseReason } from "../src/closeCode.js";
+import { readConfig } from "../src/config.js";
+import { ago, escapeHtml, renderDashboard } from "../src/dashboard.js";
+import { byPresence, presenceOf } from "../src/presence.js";
+import type { DaemonRecord } from "../src/store.js";
+
+const record: DaemonRecord = {
+  id: "r_0123456789abcdef0123456789abcdef",
+  secretHash: "x",
+  name: "MacBook Pro",
+  version: "0.1.0",
+  access: [],
+  localIps: ["192.168.1.20"],
+  publicIp: "203.0.113.7",
+  lastSeen: "2026-09-27T10:00:00.000Z",
+  createdAt: "2026-09-01T00:00:00.000Z",
+};
+const NOW = Date.parse("2026-09-27T12:00:00.000Z");
+
+describe("auth", () => {
+  it("reads bearer and basic credentials", () => {
+    expect(bearerToken("Bearer abc")).toBe("abc");
+    expect(bearerToken("bearer  abc ")).toBe("abc");
+    expect(bearerToken("Basic abc")).toBeNull();
+    expect(bearerToken(undefined)).toBeNull();
+    expect(basicPassword("Basic " + Buffer.from("admin:s3:cret").toString("base64"))).toBe("s3:cret");
+    expect(basicPassword("Basic " + Buffer.from("nocolon").toString("base64"))).toBeNull();
+  });
+  it("compares safely and treats a missing configured key as open", () => {
+    expect(safeEqual("a", "a")).toBe(true);
+    expect(safeEqual("a", "ab")).toBe(false);
+    expect(keyMatches(undefined, null)).toBe(true);
+    expect(keyMatches("k", null)).toBe(false);
+    expect(keyMatches("k", "k")).toBe(true);
+  });
+});
+
+describe("clientIp", () => {
+  it("uses the socket unless the proxy is trusted", () => {
+    expect(clientIp({ remoteAddress: "::ffff:10.0.0.2", forwardedFor: "203.0.113.7", trustProxy: false })).toBe("10.0.0.2");
+    expect(clientIp({ remoteAddress: "10.0.0.2", forwardedFor: "203.0.113.7, 10.0.0.1", trustProxy: true })).toBe("203.0.113.7");
+    expect(clientIp({ remoteAddress: "10.0.0.2", forwardedFor: undefined, trustProxy: true })).toBe("10.0.0.2");
+    expect(normalizeIp("::1")).toBe("::1");
+  });
+});
+
+describe("closeCode", () => {
+  it("keeps valid codes and replaces reserved ones", () => {
+    expect(safeCloseCode(4401)).toBe(4401);
+    expect(safeCloseCode(1006)).toBe(1000);
+    expect(safeCloseCode(undefined)).toBe(1000);
+    expect(Buffer.byteLength(safeCloseReason("é".repeat(100)))).toBeLessThanOrEqual(123);
+  });
+});
+
+describe("config", () => {
+  it("has defaults and reads keys", () => {
+    const c = readConfig({}, "/srv");
+    expect(c).toMatchObject({ port: 8787, host: "0.0.0.0", dataDir: "/srv/data", trustProxy: false });
+    expect(c.registrationKey).toBeUndefined();
+    const d = readConfig({ PORT: "9000", GRENADE_RELAY_DATA: "/data", GRENADE_RELAY_ADMIN_KEY: "a", GRENADE_RELAY_REGISTRATION_KEY: "r", GRENADE_RELAY_TRUST_PROXY: "1" }, "/srv");
+    expect(d).toMatchObject({ port: 9000, dataDir: "/data", adminKey: "a", registrationKey: "r", trustProxy: true });
+    expect(() => readConfig({ PORT: "nope" }, "/")).toThrow();
+  });
+});
+
+describe("presence", () => {
+  it("reports offline with the stored lastSeen", () => {
+    expect(presenceOf(record, null, NOW)).toEqual({
+      id: record.id, name: "MacBook Pro", version: "0.1.0", online: false,
+      lastSeen: "2026-09-27T10:00:00.000Z", publicIp: "203.0.113.7", localIps: ["192.168.1.20"],
+    });
+  });
+  it("reports online with since and lastSeen = now", () => {
+    const p = presenceOf(record, NOW - 60_000, NOW);
+    expect(p.online).toBe(true);
+    expect(p.since).toBe("2026-09-27T11:59:00.000Z");
+    expect(p.lastSeen).toBe("2026-09-27T12:00:00.000Z");
+  });
+  it("sorts online first, then most recent", () => {
+    const a = presenceOf({ ...record, name: "A" }, null, NOW);
+    const b = presenceOf({ ...record, name: "B" }, NOW, NOW);
+    const c = presenceOf({ ...record, name: "C", lastSeen: "2026-09-27T11:00:00.000Z" }, null, NOW);
+    expect([a, b, c].sort(byPresence).map((p) => p.name)).toEqual(["B", "C", "A"]);
+  });
+});
+
+describe("dashboard", () => {
+  it("escapes names and shows status and IPs", () => {
+    const html = renderDashboard([presenceOf({ ...record, name: "<b>evil</b>" }, null, NOW), presenceOf(record, NOW - 300_000, NOW)], NOW, "0.1.0");
+    expect(html).toContain("&lt;b&gt;evil&lt;/b&gt;");
+    expect(html).not.toContain("<b>evil</b>");
+    expect(html).toContain("last seen 2 h ago");
+    expect(html).toContain("for 5 min");
+    expect(html).toContain("203.0.113.7");
+    expect(html).toContain("1 of 2 Macs online");
+    expect(html).toContain('http-equiv="refresh"');
+  });
+  it("says how to connect when empty", () => {
+    expect(renderDashboard([], NOW, "0.1.0")).toContain("grenade relay on");
+  });
+  it("formats ages", () => {
+    expect(ago(10_000)).toBe("just now");
+    expect(ago(3 * 86_400_000)).toBe("3 d ago");
+    expect(escapeHtml(`"'&`)).toBe("&quot;&#39;&amp;");
+  });
+});
