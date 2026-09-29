@@ -1,6 +1,6 @@
 # grenade-relay
 
-The open-source relay that joins a Grenade phone to its Mac when they are on different networks. Macs (`grenaded`) dial out to `/v1/daemon`; phones dial `/v1/connect/<relay id>`; the relay forwards frames and reports presence (online, last seen, public and local IPs). Anyone can host one; we run the main one at `https://relay.grenade.dev`. Read `../grenade-protocol/PROTOCOL.md` "Remote access (relay)" first: this project implements exactly that.
+The open-source relay that joins a Grenade phone to its Mac when they are on different networks. Macs (`grenaded`) dial out to `/v1/daemon`; phones dial `/v1/connect/<relay id>`; the relay forwards frames and reports presence (online, last seen, public and local IPs). Anyone can host one; we run the main one on Heroku at `https://grenade-relay-7a47b5a07a7d.herokuapp.com` (see "Main instance"). It also carries push notifications: Macs post sealed pushes to `POST /v1/push` and the relay hands them to Apple's push service, or to another relay that can. Read `../grenade-protocol/PROTOCOL.md` "Remote access (relay)" and "Push notifications" first: this project implements exactly that.
 
 ## Stack
 
@@ -27,7 +27,14 @@ docker compose up -d # with .env from .env.example
 | `src/server.ts` | HTTP routes, WebSocket upgrades (refuses with 401/404/429/503 before upgrading), ping/pong liveness, hourly GC |
 | `src/hub.ts` | Live state, transport-agnostic: daemon links, registration (TOFU claim), phone pipes, routing `open`/`data`/`close`, presence. Tests drive it with fake sockets |
 | `src/store.ts` | `DaemonStore`: records in memory, debounced atomic save to `<data>/daemons.json` (0600), forgets records unseen for 90 days |
-| `src/frames.ts` | Mirror of `grenade-protocol/src/relay.ts` (schemas, paths, close codes) |
+| `src/frames.ts` | Mirror of `grenade-protocol/src/relay.ts` (schemas, paths, close codes) and of the push route's bodies in `src/push.ts` (`PushRequest`, `PushError`) |
+| `src/push/pushRoute.ts` | `POST /v1/push`, transport-agnostic: key check, size, parse, topic, limits, then send, pass upstream, or 503. Tests drive it with a fake sender |
+| `src/push/pushPayload.ts` | Pure: a push request → the APNs body (fallback alert + sealed content) and headers |
+| `src/push/pushResult.ts` | Pure: what APNs answered → what the route answers (`replyForApns`, `refusal`) |
+| `src/push/pushLimiter.ts` | `PushLimiter`: 60 a minute per sender address, 20 per phone; fixed windows, `now` passed in, ended windows swept |
+| `src/push/apnsToken.ts` | Pure: the APNs provider token (ES256 JWT from the `.p8` key), `ProviderTokens` reuses one for 50 minutes |
+| `src/push/apnsClient.ts` | `createApnsSender`: HTTP/2 to APNs, one session per host, re-made when it closes; 10 s timeout; never throws (status 0) |
+| `src/push/upstream.ts` | `createUpstream`: passes a push, unchanged, to another relay's push route with `X-Grenade-Push-Hops` |
 | `src/auth.ts` | Pure: SHA-256 hex, timing-safe compare, Bearer/Basic parsing, `keyMatches` |
 | `src/presence.ts` | Pure: record + online-since → `Presence`; sort order |
 | `src/dashboard.ts` | Pure: the admin HTML page (escaped, self-contained, light/dark, refresh 15 s) |
@@ -35,6 +42,14 @@ docker compose up -d # with .env from .env.example
 | `src/closeCode.ts` | Pure: close codes/reasons that `ws` accepts |
 | `src/log.ts`, `src/version.ts` | Logger (stderr, `key=value`), version from package.json |
 | `test/fixtures/` | Copies of the relay fixtures from `../grenade-protocol/fixtures` |
+
+## Main instance (Heroku)
+
+- App `grenade-relay` (Croissant Heroku account), one Basic `web` dyno running `Procfile` (`node dist/main.js`); Heroku's Node buildpack runs `npm run build`. Deploy: `git push heroku main`. Logs: `heroku logs -t -a grenade-relay`.
+- Config vars: `GRENADE_RELAY_TRUST_PROXY=1`, `GRENADE_RELAY_ADMIN_KEY` (read it with `heroku config:get`), no registration key (open relay). Heroku terminates TLS, so Caddy is not used there.
+- Push: the main relay is the one that must hold the APNs key, and it is **not set yet**. Setting `GRENADE_RELAY_APNS_KEY` (the `.p8` text; `\n` for newlines is fine), `GRENADE_RELAY_APNS_KEY_ID` and `GRENADE_RELAY_APNS_TEAM_ID` is Adam's to do; never create, read or set them on Adam's behalf. Until then the main relay's default upstream is itself, so it answers `503 push_unavailable` to every push (one hop, then the hop guard stops it). Set `GRENADE_RELAY_PUSH_UPSTREAM=off` there to skip that hop.
+- Keep it at **one dyno**: all state is in one process. The disk is ephemeral, so `daemons.json` is lost on each restart (at least daily). Macs re-register within seconds with their access lists; a Mac that is off drops out of presence until it reconnects.
+- The router closes connections idle for 55 s; the 15 s pings keep links open.
 
 ## Invariants
 
@@ -47,16 +62,23 @@ docker compose up -d # with .env from .env.example
 - `GRENADE_RELAY_REGISTRATION_KEY` unset = open relay (the main one); set = private. `GRENADE_RELAY_ADMIN_KEY` unset = no dashboard, no list (404).
 - Max WebSocket message 4 MB (screen frames with colors).
 - Pure modules take no I/O and no clock; inject `now`.
+- **The push route is blind and keeps nothing.** `c` is sealed to the phone; never try to open it, and never add a push feature that needs the session, the Mac or the text in the clear. No device token is stored: the daemon sends it with every push, so a restart loses nothing.
+- **A device token is never logged**, nor `e` or `c`. A log line names a phone by the first 8 hex of `sha256(deviceToken)`. `pushRoute.test.ts` checks every answer's log lines for it.
+- The APNs key is read once at start and never printed; the start-up line only says `push=apns`, `push=upstream <url>` or `push=off`. A key without key id and team id stops the start with a message that names the missing setting.
+- A push is passed upstream at most once: a request that carries `X-Grenade-Push-Hops` is sent by this relay or refused with 503, never passed on. A relay with its own key never passes anything on and checks the topic; one that only passes on does not.
+- Push bodies are capped at 8 KB (`MAX_PUSH_BODY_BYTES`); the reader stops a little past it and the route answers 413.
 
 ## Changing the contract
 
 1. Change `../grenade-protocol` first (`PROTOCOL.md`, `src/relay.ts`, fixtures).
 2. Mirror it in `src/frames.ts`.
-3. Copy the fixtures: `cp ../grenade-protocol/fixtures/{relay.*,http.relay.*,e2e.*}.json test/fixtures/`. The fixture test fails until every frame type has one.
+3. Copy the fixtures: `cp ../grenade-protocol/fixtures/{relay.*,http.relay.*,e2e.*}.json test/fixtures/` (the push route's bodies are `http.relay.push.*`). The fixture test fails until every frame type has one.
 4. Update the daemon (`grenade-backend/src/relay/`) and the phone clients to match.
 
 ## Known gaps
 
-- No rate limiting beyond 8 pipes per daemon and the 4 MB message cap. Put the public relay behind a proxy with connection limits if abuse shows up.
+- No rate limiting beyond 8 pipes per daemon, the 4 MB message cap and the push route's limits. Put the public relay behind a proxy with connection limits if abuse shows up.
+- The push route on an open relay takes a push from anyone who knows a device token. Tokens are 32 random bytes that only a phone, the Macs it paired with and the relay ever see, and the limits cap what a leaked one is worth. A relay that passes pushes upstream is one sender to the upstream, so all its Macs share 60 a minute there.
+- Push limits are per process and in memory, like everything else here.
 - One process holds all state in memory; it does not scale out across instances.
 - Pairing still needs the phone and Mac on the same network; the relay only carries already-paired phones.

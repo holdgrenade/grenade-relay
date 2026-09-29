@@ -1,6 +1,7 @@
 /**
  * HTTP + WebSocket front of the relay. Routes requests to the hub and keeps links alive with pings.
  *   GET /health · GET /v1/presence/<id> · GET /v1/daemons (admin) · GET / (dashboard, admin)
+ *   POST /v1/push (one sealed push to a phone, see src/push/)
  *   WS /v1/daemon (daemon links) · WS /v1/connect/<id> (phone pipes)
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -9,13 +10,28 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { basicPassword, bearerToken, keyMatches } from "./auth.js";
 import { clientIp } from "./clientIp.js";
 import { renderDashboard } from "./dashboard.js";
-import { RELAY_CONNECT_PATH, RELAY_DAEMONS_PATH, RELAY_DAEMON_PATH, RELAY_PRESENCE_PATH, RelayId } from "./frames.js";
+import { RELAY_CONNECT_PATH, RELAY_DAEMONS_PATH, RELAY_DAEMON_PATH, RELAY_PRESENCE_PATH, RELAY_PUSH_PATH, RelayId } from "./frames.js";
 import { Hub, type Admission, type Pipe } from "./hub.js";
 import type { Logger } from "./log.js";
+import type { ApnsSender } from "./push/apnsClient.js";
+import { PushLimiter } from "./push/pushLimiter.js";
+import { MAX_PUSH_BODY_BYTES, handlePush } from "./push/pushRoute.js";
+import { HOPS_HEADER, type Upstream } from "./push/upstream.js";
 import { DaemonStore } from "./store.js";
 
 export const MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 export const REGISTER_TIMEOUT_MS = 5000;
+
+/** How `POST /v1/push` delivers. With neither `apns` nor `upstream` it answers 503. */
+export interface PushOptions {
+  /** Sends to Apple's push service; set when the relay holds a push key. */
+  apns?: ApnsSender;
+  /** Bundle ids the push key sends for. */
+  topics?: string[];
+  /** Where pushes are passed on to when there is no key. */
+  upstream?: Upstream;
+  limiter?: PushLimiter;
+}
 
 export interface RelayOptions {
   port: number;
@@ -25,6 +41,7 @@ export interface RelayOptions {
   registrationKey?: string | undefined;
   adminKey?: string | undefined;
   trustProxy?: boolean;
+  push?: PushOptions;
   log: Logger;
   version: string;
   /** How often to ping every socket, and how long without a pong before it is dropped. */
@@ -63,8 +80,27 @@ export async function startRelay(o: RelayOptions): Promise<RunningRelay> {
     }
   });
 
+  const pushLimiter = o.push?.limiter ?? new PushLimiter();
+
+  async function push(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const rawBody = await readCapped(req, MAX_PUSH_BODY_BYTES);
+      const reply = await handlePush(
+        { authorization: bearerToken(req.headers.authorization), hops: req.headers[HOPS_HEADER] !== undefined, ip: ipOf(req), rawBody },
+        { registrationKey: o.registrationKey, topics: o.push?.topics ?? [], apns: o.push?.apns ?? null, upstream: o.push?.upstream ?? null, limiter: pushLimiter, log: o.log, now },
+      );
+      // A body that was cut off is still arriving: answer, then let the connection go.
+      const cut = Buffer.byteLength(rawBody, "utf8") > MAX_PUSH_BODY_BYTES;
+      json(res, reply.status, reply.body, cut ? { ...reply.headers, Connection: "close" } : reply.headers);
+    } catch (e) {
+      o.log.error("Push request failed", { error: e });
+      if (!res.headersSent) json(res, 500, { error: "internal" });
+    }
+  }
+
   function route(req: IncomingMessage, res: ServerResponse): void {
     const path = new URL(req.url ?? "/", "http://relay").pathname;
+    if (req.method === "POST" && path === RELAY_PUSH_PATH) return void push(req, res);
     if (req.method !== "GET" && req.method !== "HEAD") return json(res, 405, { error: "method_not_allowed" });
     if (path === "/health") return json(res, 200, { ok: true, version: o.version });
     if (path.startsWith(RELAY_PRESENCE_PATH)) {
@@ -180,6 +216,7 @@ export async function startRelay(o: RelayOptions): Promise<RunningRelay> {
     async stop() {
       clearInterval(heartbeat);
       clearInterval(gc);
+      o.push?.apns?.close?.();
       hub.closeAll();
       for (const ws of wss.clients) ws.terminate();
       store.flush();
@@ -208,8 +245,33 @@ function refuseUpgrade(socket: Duplex, status: number, text: string): void {
   socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
 }
 
-function json(res: ServerResponse, status: number, body: unknown): void {
+/** Reads a request body, but no more than a little past `max` bytes: the rest is left unread. */
+function readCapped(req: IncomingMessage, max: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    };
+    req.on("data", (chunk: Buffer) => {
+      if (settled) return;
+      chunks.push(chunk);
+      size += chunk.length;
+      if (size > max) {
+        req.pause();
+        finish();
+      }
+    });
+    req.on("end", finish);
+    req.on("error", (e) => (settled ? undefined : reject(e)));
+  });
+}
+
+function json(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
   const text = JSON.stringify(body);
-  res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(text), "Cache-Control": "no-store" });
+  res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(text), "Cache-Control": "no-store", ...headers });
   res.end(text);
 }

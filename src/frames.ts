@@ -9,6 +9,11 @@ export const RELAY_DAEMON_PATH = "/v1/daemon";
 export const RELAY_CONNECT_PATH = "/v1/connect/";
 export const RELAY_PRESENCE_PATH = "/v1/presence/";
 export const RELAY_DAEMONS_PATH = "/v1/daemons";
+export const RELAY_PUSH_PATH = "/v1/push";
+/** The main relay (Heroku, until there is a domain). A relay without a push key passes pushes on to it. */
+export const OFFICIAL_RELAY_URL = "https://grenade-relay-7a47b5a07a7d.herokuapp.com";
+/** Largest sealed push content, as base64 characters: with the rest of the payload it stays under APNs' 4 KB. */
+export const PUSH_SEALED_MAX_BASE64 = 2800;
 /** Close code for phone pipes when the daemon's link drops. */
 export const CLOSE_DAEMON_OFFLINE = 4503;
 
@@ -84,6 +89,45 @@ export const DaemonList = z.object({ daemons: z.array(Presence) });
 
 /** First plaintext frame each way on a phone pipe. The relay forwards it like any other; the schema is for tests. */
 export const E2EHello = z.object({ e2e: z.literal(1), e: z.string().min(1) });
+
+// ---- push route (mirror of grenade-protocol/src/push.ts, PROTOCOL.md "Push route") ----
+
+export const PushProvider = z.enum(["apns"]);
+export const PushEnvironment = z.enum(["production", "sandbox"]);
+export type PushEnvironment = z.infer<typeof PushEnvironment>;
+
+/** Body of `POST /v1/push`. Everything the relay may read; `c` is sealed to the phone. */
+export const PushRequest = z.object({
+  provider: PushProvider,
+  deviceToken: z.string().regex(/^[0-9a-f]{64,200}$/, "not a device token"),
+  environment: PushEnvironment,
+  /** The app's bundle id: the APNs topic. */
+  topic: z.string().regex(/^[A-Za-z0-9.-]{1,155}$/, "not a bundle id"),
+  /** Opaque to the relay: a later push with the same value replaces the earlier one on the phone. */
+  collapse: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+  /** The daemon's ephemeral X25519 public key for this push. */
+  e: z.string().regex(/^[A-Za-z0-9+/]{43}=$/, "not a 32-byte key in base64"),
+  /** base64(ciphertext ‖ tag). The relay cannot open it. */
+  c: z.string().min(24).max(PUSH_SEALED_MAX_BASE64).regex(/^[A-Za-z0-9+/]+={0,2}$/, "not base64"),
+});
+export type PushRequest = z.infer<typeof PushRequest>;
+
+export const PushResponse = z.object({ ok: z.literal(true) });
+export type PushResponse = z.infer<typeof PushResponse>;
+
+export const PushErrorCode = z.enum([
+  "bad_request",
+  "unauthorized",
+  "topic_not_served",
+  "unregistered",
+  "too_large",
+  "rate_limited",
+  "apns_failed",
+  "push_unavailable",
+]);
+export type PushErrorCode = z.infer<typeof PushErrorCode>;
+export const PushError = z.object({ error: PushErrorCode });
+export type PushError = z.infer<typeof PushError>;
 
 // ---- parsing ----------------------------------------------------------------
 
