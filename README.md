@@ -1,6 +1,6 @@
 # grenade-relay
 
-The relay that lets [Grenade](https://grenade.dev) reach your Mac from anywhere. When your phone and your Mac are on different networks, both dial out to a relay and it joins them up. The Mac needs no open port, no VPN and no port forwarding.
+The relay that lets [Grenade](https://holdgrenade.com) reach your Mac from anywhere. When your phone and your Mac are on different networks, both dial out to a relay and it joins them up. The Mac needs no open port, no VPN and no port forwarding.
 
 We run the main relay at `https://grenade-relay-7a47b5a07a7d.herokuapp.com` (on Heroku, until there is a domain). You can host your own: for your team, your company, or just yourself.
 

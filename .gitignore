@@ -1,6 +1,14 @@
 node_modules/
 dist/
 data/
-.env
-.DS_Store
+coverage/
 *.log
+.DS_Store
+
+# Secrets never belong here: the relay's keys and the APNs key (GRENADE_RELAY_APNS_KEY_FILE)
+.env
+.env.*
+!.env.example
+*.p8
+*.pem
+*.key
