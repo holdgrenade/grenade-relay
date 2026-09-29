@@ -32,5 +32,11 @@
     "token": "grt_example_token",
     "access": "d5539b67d85748948bcacf6d97c00180d4d5c0465b5e2957511092fe8ad6d1a2",
     "accessHash": "d6a2ce331bda7c3719c0eae9f7ab8926d18397dac3f6a9300264433714e215c1"
+  },
+  "pairCheck": {
+    "code": "482913",
+    "daemonKey": "9MRwbGGJod1aX4P/tNPNT+z/114HLH2rnjx76hw44XM=",
+    "check": "7343",
+    "typed": "4829137343"
   }
 }

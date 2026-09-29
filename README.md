@@ -2,7 +2,7 @@
 
 The relay that lets [Grenade](https://grenade.dev) reach your Mac from anywhere. When your phone and your Mac are on different networks, both dial out to a relay and it joins them up. The Mac needs no open port, no VPN and no port forwarding.
 
-We run the main relay at `https://relay.grenade.dev`. You can host your own: for your team, your company, or just yourself.
+We run the main relay at `https://grenade-relay-7a47b5a07a7d.herokuapp.com` (on Heroku, until there is a domain). You can host your own: for your team, your company, or just yourself.
 
 ## What the relay can and cannot see
 
@@ -13,7 +13,7 @@ What a relay does know about each Mac:
 - its name and Grenade version,
 - whether it is online, since when, and when it was last seen,
 - the public IP its connection came from, and the local IPs it reports,
-- the SHA-256 of each paired phone's *access key* (derived from, but not, the pairing token), so it can decide who may see and reach the Mac.
+- the SHA-256 of each paired phone's *access key* (derived from, but not, the pairing token), so it can decide who may see and reach the Mac. When a phone is unpaired (`grenade unpair` on the Mac, or Unpair on the phone), the Mac sends the list without it and the relay stops admitting that phone at once; a Mac that leaves a relay (`grenade relay off`) empties its list there first.
 
 It never sees terminal contents, keystrokes, or pairing tokens.
 
@@ -68,7 +68,7 @@ On each Mac, with the Grenade daemon installed:
 grenade relay on https://203.0.113.7                   # an open relay, by IP
 grenade relay on https://relay.example.com              # an open relay, by name
 grenade relay on https://203.0.113.7 --key <key>        # a relay with a registration key
-grenade relay on                                        # the main relay, relay.grenade.dev
+grenade relay on                                        # the main relay
 ```
 
 Phones that already paired with that Mac learn the relay the next time they connect on the same Wi‑Fi. From then on they reach the Mac from any network, and show whether it is online and its IP addresses.

@@ -105,6 +105,22 @@ describe("Hub phone pipes", () => {
     expect(hub.admitPhone(ID, ACCESS)).toBe("offline");
   });
 
+  it("stops admitting a phone the Mac unpaired, and keeps admitting the others", () => {
+    const { hub } = setup();
+    const { link } = online(hub);
+    hub.handleDaemonMessage(link, JSON.stringify({ type: "update", access: [sha256hex(ACCESS), sha256hex("second-phone")] }));
+    expect(hub.admitPhone(ID, ACCESS)).toBe("ok");
+    expect(hub.admitPhone(ID, "second-phone")).toBe("ok");
+    hub.handleDaemonMessage(link, JSON.stringify({ type: "update", access: [sha256hex("second-phone")] }));
+    expect(hub.admitPhone(ID, ACCESS)).toBe("unauthorized");
+    expect(hub.presence(ID, ACCESS).status).toBe(401);
+    expect(hub.admitPhone(ID, "second-phone")).toBe("ok");
+    // Still refused while the Mac is off: the list is kept.
+    hub.handleDaemonClose(link);
+    expect(hub.admitPhone(ID, ACCESS)).toBe("unauthorized");
+    expect(hub.admitPhone(ID, "second-phone")).toBe("offline");
+  });
+
   it("routes open, data both ways, and close both ways", () => {
     const { hub } = setup();
     const { sock, link } = online(hub);

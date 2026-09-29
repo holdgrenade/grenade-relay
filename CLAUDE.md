@@ -57,16 +57,17 @@ docker compose up -d # with .env from .env.example
 - Nothing secret is stored: only `sha256(secret)` per daemon and `sha256(access)` per phone. Compare with `safeEqual`.
 - Every daemon frame goes through `parseRelayDaemonFrame`; a bad one gets `error` then the link closes. The first frame must be `register` within 5 s.
 - The first link to register an id owns it (by secret). A later link with the right secret replaces the old one (old closed with 4000, its phones with 4503).
+- Unpairing is the daemon's `update {access}` with a shorter list: the relay admits exactly the phones in the latest list, and the daemon closes that phone's open pipes itself (`close`). Nothing in the relay knows what a pairing is.
 - Phones are checked before the upgrade: 404 unknown id, 401 access not in the daemon's list, 503 daemon offline, 429 over 8 pipes. The access list is persisted, so presence answers while the Mac is off.
 - Every socket is pinged every 15 s and terminated after 30 s without a pong. A dropped daemon link closes its phone pipes with 4503 and sets `lastSeen`.
 - `GRENADE_RELAY_REGISTRATION_KEY` unset = open relay (the main one); set = private. `GRENADE_RELAY_ADMIN_KEY` unset = no dashboard, no list (404).
 - Max WebSocket message 4 MB (screen frames with colors).
-- Pure modules take no I/O and no clock; inject `now`.
 - **The push route is blind and keeps nothing.** `c` is sealed to the phone; never try to open it, and never add a push feature that needs the session, the Mac or the text in the clear. No device token is stored: the daemon sends it with every push, so a restart loses nothing.
 - **A device token is never logged**, nor `e` or `c`. A log line names a phone by the first 8 hex of `sha256(deviceToken)`. `pushRoute.test.ts` checks every answer's log lines for it.
 - The APNs key is read once at start and never printed; the start-up line only says `push=apns`, `push=upstream <url>` or `push=off`. A key without key id and team id stops the start with a message that names the missing setting.
 - A push is passed upstream at most once: a request that carries `X-Grenade-Push-Hops` is sent by this relay or refused with 503, never passed on. A relay with its own key never passes anything on and checks the topic; one that only passes on does not.
 - Push bodies are capped at 8 KB (`MAX_PUSH_BODY_BYTES`); the reader stops a little past it and the route answers 413.
+- Pure modules take no I/O and no clock; inject `now`.
 
 ## Changing the contract
 
@@ -74,6 +75,7 @@ docker compose up -d # with .env from .env.example
 2. Mirror it in `src/frames.ts`.
 3. Copy the fixtures: `cp ../grenade-protocol/fixtures/{relay.*,http.relay.*,e2e.*}.json test/fixtures/` (the push route's bodies are `http.relay.push.*`). The fixture test fails until every frame type has one.
 4. Update the daemon (`grenade-backend/src/relay/`) and the phone clients to match.
+5. Update the public docs: this `README.md` and `../grenade-website/src/pages/relay.astro` (self-hosting guide + API reference).
 
 ## Known gaps
 
@@ -81,4 +83,4 @@ docker compose up -d # with .env from .env.example
 - The push route on an open relay takes a push from anyone who knows a device token. Tokens are 32 random bytes that only a phone, the Macs it paired with and the relay ever see, and the limits cap what a leaked one is worth. A relay that passes pushes upstream is one sender to the upstream, so all its Macs share 60 a minute there.
 - Push limits are per process and in memory, like everything else here.
 - One process holds all state in memory; it does not scale out across instances.
-- Pairing still needs the phone and Mac on the same network; the relay only carries already-paired phones.
+- The relay knows nothing about pairing. A phone that scanned a Mac's QR code comes in like any other: the Mac adds the access hash of the code's one-time secret to its list for at most two minutes (PROTOCOL.md "Pairing offer (QR code)"). Do not add a pairing route here.
