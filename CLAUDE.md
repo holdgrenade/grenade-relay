@@ -4,7 +4,7 @@ The open-source relay that joins a Grenade phone to its Mac when they are on dif
 
 ## Stack
 
-Node 22+, TypeScript strict ESM, `ws`, `zod`. Tests: vitest. Deploy: Docker (`Dockerfile`) behind Caddy for TLS (`docker-compose.yml`, `Caddyfile`). `RELAY_HOST` is a public IP or a DNS name; Caddy gets a Let's Encrypt certificate for either, using the `shortlived` profile (required for IPs) and `default_sni` (IP clients send no SNI). No other runtime dependencies.
+Node 22+ (`@types/node` stays on 22 so the types match the oldest Node we support), TypeScript strict ESM, `ws`, `zod`. Tests: vitest. Deploy: Docker (`Dockerfile`) behind Caddy for TLS (`docker-compose.yml`, `Caddyfile`). `RELAY_HOST` is a public IP or a DNS name; Caddy gets a Let's Encrypt certificate for either, using the `shortlived` profile (required for IPs) and `default_sni` (IP clients send no SNI). No other runtime dependencies.
 
 ## Commands
 
