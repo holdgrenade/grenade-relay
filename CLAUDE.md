@@ -74,7 +74,7 @@ docker compose up -d # with .env from .env.example
 1. Change `../grenade-protocol` first (`PROTOCOL.md`, `src/relay.ts`, fixtures).
 2. Mirror it in `src/frames.ts`.
 3. Copy the fixtures: `cp ../grenade-protocol/fixtures/{relay.*,http.relay.*,e2e.*}.json test/fixtures/` (the push route's bodies are `http.relay.push.*`). The fixture test fails until every frame type has one.
-4. Update the daemon (`grenade-backend/src/relay/`) and the phone clients to match.
+4. Update the daemon (`grenade-cli/src/relay/`) and the phone clients to match.
 5. Update the public docs: this `README.md` and `../grenade-website/src/pages/relay.astro` (self-hosting guide + API reference).
 
 ## Known gaps
