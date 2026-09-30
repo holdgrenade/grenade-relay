@@ -57,7 +57,7 @@ GRENADE_RELAY_ADMIN_KEY=$(openssl rand -hex 24) PORT=8787 npm start
 | `GRENADE_RELAY_APNS_KEY_FILE` | unset | The same key as a file path, in place of `GRENADE_RELAY_APNS_KEY`. |
 | `GRENADE_RELAY_APNS_KEY_ID` | unset | The key's id (10 characters). Required with a key. |
 | `GRENADE_RELAY_APNS_TEAM_ID` | unset | The Apple Developer team the key belongs to. Required with a key. |
-| `GRENADE_RELAY_APNS_TOPICS` | `com.adamchew.grenade` | Bundle ids the key sends for, separated by commas. |
+| `GRENADE_RELAY_APNS_TOPICS` | `com.holdgrenade.grenade` | Bundle ids the key sends for, separated by commas. |
 | `GRENADE_LOG` | `info` | `debug` also logs every phone connecting and leaving, and every push sent. |
 
 ## Pointing a Mac at your relay

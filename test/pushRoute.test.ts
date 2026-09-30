@@ -35,7 +35,7 @@ function fakeUpstream(reply: RouteReply = { status: 200, body: { ok: true } }) {
 
 function setup(over: Partial<PushRouteDeps> = {}) {
   const { log, lines } = collectingLogger();
-  const deps: PushRouteDeps = { topics: ["com.adamchew.grenade"], apns: null, upstream: null, limiter: new PushLimiter(), log, now: () => NOW, ...over };
+  const deps: PushRouteDeps = { topics: ["com.holdgrenade.grenade"], apns: null, upstream: null, limiter: new PushLimiter(), log, now: () => NOW, ...over };
   const post = (input: Partial<PushRouteInput> = {}) => handlePush({ authorization: null, hops: false, ip: "203.0.113.7", rawBody: fixture, ...input }, deps);
   return { post, lines };
 }

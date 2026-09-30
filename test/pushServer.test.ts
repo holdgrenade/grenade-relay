@@ -43,7 +43,7 @@ const post = (base: string, body: string = fixture, headers: Record<string, stri
 describe("POST /v1/push", () => {
   it("sends the push and answers 200", async () => {
     const { sender, sent } = fakeSender();
-    const base = await relay({ apns: sender, topics: ["com.adamchew.grenade"] });
+    const base = await relay({ apns: sender, topics: ["com.holdgrenade.grenade"] });
     const res = await post(base);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
@@ -57,13 +57,13 @@ describe("POST /v1/push", () => {
   });
 
   it("asks for the registration key on a relay that has one", async () => {
-    const base = await relay({ apns: fakeSender().sender, topics: ["com.adamchew.grenade"] }, "team-key");
+    const base = await relay({ apns: fakeSender().sender, topics: ["com.holdgrenade.grenade"] }, "team-key");
     expect((await post(base)).status).toBe(401);
     expect((await post(base, fixture, { authorization: "Bearer team-key" })).status).toBe(200);
   });
 
   it("answers 400, 413 and 429 with Retry-After", async () => {
-    const base = await relay({ apns: fakeSender().sender, topics: ["com.adamchew.grenade"], limiter: new PushLimiter({ perToken: 1 }) });
+    const base = await relay({ apns: fakeSender().sender, topics: ["com.holdgrenade.grenade"], limiter: new PushLimiter({ perToken: 1 }) });
     expect((await post(base, "{}")).status).toBe(400);
     const big = await post(base, JSON.stringify({ ...request, c: "A".repeat(9000) }));
     expect(big.status).toBe(413);
@@ -75,7 +75,7 @@ describe("POST /v1/push", () => {
   });
 
   it("keeps answering 405 to other posts and 404 to a GET", async () => {
-    const base = await relay({ apns: fakeSender().sender, topics: ["com.adamchew.grenade"] });
+    const base = await relay({ apns: fakeSender().sender, topics: ["com.holdgrenade.grenade"] });
     expect((await fetch(`${base}/v1/daemons`, { method: "POST", body: "{}" })).status).toBe(405);
     expect((await fetch(`${base}/health`, { method: "POST", body: "{}" })).status).toBe(405);
     expect((await fetch(`${base}/v1/push`)).status).toBe(404);
@@ -85,7 +85,7 @@ describe("POST /v1/push", () => {
 describe("a relay without a push key", () => {
   it("passes the push to its upstream, which sends it", async () => {
     const { sender, sent } = fakeSender();
-    const main = await relay({ apns: sender, topics: ["com.adamchew.grenade"] });
+    const main = await relay({ apns: sender, topics: ["com.holdgrenade.grenade"] });
     const own = await relay({ upstream: createUpstream({ url: main }) });
     const res = await post(own);
     expect(res.status).toBe(200);
@@ -94,7 +94,7 @@ describe("a relay without a push key", () => {
   });
 
   it("hands back what the upstream answered", async () => {
-    const main = await relay({ apns: fakeSender({ status: 410, reason: "Unregistered" }).sender, topics: ["com.adamchew.grenade"] });
+    const main = await relay({ apns: fakeSender({ status: 410, reason: "Unregistered" }).sender, topics: ["com.holdgrenade.grenade"] });
     const own = await relay({ upstream: createUpstream({ url: main }) });
     const res = await post(own);
     expect(res.status).toBe(410);
@@ -103,7 +103,7 @@ describe("a relay without a push key", () => {
 
   it("brings the upstream's registration key", async () => {
     const { sender, sent } = fakeSender();
-    const main = await relay({ apns: sender, topics: ["com.adamchew.grenade"] }, "main-key");
+    const main = await relay({ apns: sender, topics: ["com.holdgrenade.grenade"] }, "main-key");
     expect((await post(await relay({ upstream: createUpstream({ url: main }) }))).status).toBe(401);
     expect((await post(await relay({ upstream: createUpstream({ url: main, key: "main-key" }) }))).status).toBe(200);
     expect(sent).toHaveLength(1);
@@ -187,7 +187,7 @@ describe("APNs client", () => {
     const first = apple.seen[0]!;
     expect(first.headers[":method"]).toBe("POST");
     expect(first.headers[":path"]).toBe(`/3/device/${request.deviceToken}`);
-    expect(first.headers["apns-topic"]).toBe("com.adamchew.grenade");
+    expect(first.headers["apns-topic"]).toBe("com.holdgrenade.grenade");
     expect(first.headers["apns-push-type"]).toBe("alert");
     expect(first.headers["apns-collapse-id"]).toBe(request.collapse);
     expect(String(first.headers["authorization"])).toMatch(/^bearer [\w-]+\.[\w-]+\.[\w-]+$/);

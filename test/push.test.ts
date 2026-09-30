@@ -68,7 +68,7 @@ describe("apnsMessage", () => {
     expect(m.path).toBe(`/3/device/${request.deviceToken}`);
     expect(m.headers).toEqual({
       authorization: "bearer jwt",
-      "apns-topic": "com.adamchew.grenade",
+      "apns-topic": "com.holdgrenade.grenade",
       "apns-push-type": "alert",
       "apns-priority": "10",
       "apns-collapse-id": request.collapse,
@@ -164,7 +164,7 @@ describe("push settings", () => {
 
   it("an own key sends by itself and passes nothing on", () => {
     const c = readConfig({ GRENADE_RELAY_APNS_KEY: "pem", GRENADE_RELAY_APNS_KEY_ID: "K", GRENADE_RELAY_APNS_TEAM_ID: "T", GRENADE_RELAY_PUSH_UPSTREAM: "https://up.example.com" }, "/");
-    expect(c.push).toEqual({ apns: { key: "pem", keyId: "K", teamId: "T", topics: ["com.adamchew.grenade"] }, upstream: null, upstreamKey: undefined });
+    expect(c.push).toEqual({ apns: { key: "pem", keyId: "K", teamId: "T", topics: ["com.holdgrenade.grenade"] }, upstream: null, upstreamKey: undefined });
     const f = readConfig({ GRENADE_RELAY_APNS_KEY_FILE: "/run/secrets/apns.p8", GRENADE_RELAY_APNS_KEY_ID: "K", GRENADE_RELAY_APNS_TEAM_ID: "T", GRENADE_RELAY_APNS_TOPICS: "com.example.one, com.example.two" }, "/");
     expect(f.push.apns).toEqual({ keyFile: "/run/secrets/apns.p8", keyId: "K", teamId: "T", topics: ["com.example.one", "com.example.two"] });
   });

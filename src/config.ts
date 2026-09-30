@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { OFFICIAL_RELAY_URL } from "./frames.js";
 import { normalizeUpstreamUrl } from "./push/upstream.js";
 
-export const DEFAULT_PUSH_TOPIC = "com.adamchew.grenade";
+export const DEFAULT_PUSH_TOPIC = "com.holdgrenade.grenade";
 
 /** How this relay delivers pushes (PROTOCOL.md "Push route"). */
 export interface PushConfig {
