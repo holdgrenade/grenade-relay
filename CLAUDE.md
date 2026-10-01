@@ -43,6 +43,10 @@ docker compose up -d # with .env from .env.example
 | `src/log.ts`, `src/version.ts` | Logger (stderr, `key=value`), version from package.json |
 | `test/fixtures/` | Copies of the relay fixtures from `../grenade-protocol/fixtures` |
 
+## Versions and releases
+
+`version` in `package.json` is the relay's version (`/health` and the startup log show it), from `1.0.0` on 2026-10-01. Every change bumps it in the same commit (patch for fixes, minor for features). On a push to `main`, `.github/workflows/release.yml` type-checks, tests and builds; when the version has no tag yet it tags `v<version>` and makes a GitHub release with generated notes. A push without a bump only runs the checks. A release does not deploy: `git push heroku main` stays a step of its own.
+
 ## Main instance (Heroku)
 
 - Served at `https://relay.holdgrenade.com` (`OFFICIAL_RELAY_URL`; a Cloudflare DNS record pointing at Heroku's DNS target). The old `https://grenade-relay-7a47b5a07a7d.herokuapp.com` still reaches the same app, so Macs that stored it keep working. The public website does not say the relay runs on Heroku; keep it that way.

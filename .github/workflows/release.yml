@@ -1,0 +1,53 @@
+# Releases the relay when a push to main carries a version that has no tag yet.
+# Bumping `version` in package.json is the release switch; a push without a bump only runs the tests.
+#
+# A release is the tag v<version> and a GitHub release. It does not deploy: the main relay is deployed by
+# `git push heroku main`, a step of its own (CLAUDE.md "Main instance").
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write # the tag and the GitHub release
+
+# Two pushes in a row release one after the other, never at the same time.
+concurrency: release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install, type-check, test and build
+        run: npm ci && npm run typecheck && npm test && npm run build
+
+      - name: Is this version tagged already?
+        id: version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          git fetch --tags --quiet
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then released=true; else released=false; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "released=$released" >> "$GITHUB_OUTPUT"
+          echo "grenade-relay $version tagged: $released"
+
+      # Safe to run again: each part skips what an earlier, interrupted run already did.
+      - name: Tag and GitHub release
+        if: steps.version.outputs.released == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+          if ! gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release create "v$VERSION" --title "Grenade Relay $VERSION" --generate-notes
+          fi
