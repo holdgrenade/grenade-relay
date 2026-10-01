@@ -10,8 +10,8 @@ export const RELAY_CONNECT_PATH = "/v1/connect/";
 export const RELAY_PRESENCE_PATH = "/v1/presence/";
 export const RELAY_DAEMONS_PATH = "/v1/daemons";
 export const RELAY_PUSH_PATH = "/v1/push";
-/** The main relay (Heroku, until there is a domain). A relay without a push key passes pushes on to it. */
-export const OFFICIAL_RELAY_URL = "https://grenade-relay-7a47b5a07a7d.herokuapp.com";
+/** The main relay. A relay without a push key passes pushes on to it. */
+export const OFFICIAL_RELAY_URL = "https://relay.holdgrenade.com";
 /** Largest sealed push content, as base64 characters: with the rest of the payload it stays under APNs' 4 KB. */
 export const PUSH_SEALED_MAX_BASE64 = 2800;
 /** Close code for phone pipes when the daemon's link drops. */

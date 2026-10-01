@@ -45,6 +45,7 @@ docker compose up -d # with .env from .env.example
 
 ## Main instance (Heroku)
 
+- Served at `https://relay.holdgrenade.com` (`OFFICIAL_RELAY_URL`; a Cloudflare DNS record pointing at Heroku's DNS target). The old `https://grenade-relay-7a47b5a07a7d.herokuapp.com` still reaches the same app, so Macs that stored it keep working. The public website does not say the relay runs on Heroku; keep it that way.
 - App `grenade-relay` (Croissant Heroku account), one Basic `web` dyno running `Procfile` (`node dist/main.js`); Heroku's Node buildpack runs `npm run build`. Deploy: `git push heroku main`. Logs: `heroku logs -t -a grenade-relay`.
 - Config vars: `GRENADE_RELAY_TRUST_PROXY=1`, `GRENADE_RELAY_ADMIN_KEY` (read it with `heroku config:get`), no registration key (open relay). Heroku terminates TLS, so Caddy is not used there.
 - Push: the main relay is the one that must hold the APNs key, and it is **not set yet**. Setting `GRENADE_RELAY_APNS_KEY` (the `.p8` text; `\n` for newlines is fine), `GRENADE_RELAY_APNS_KEY_ID` and `GRENADE_RELAY_APNS_TEAM_ID` is Adam's to do; never create, read or set them on Adam's behalf. Until then the main relay's default upstream is itself, so it answers `503 push_unavailable` to every push (one hop, then the hop guard stops it). Set `GRENADE_RELAY_PUSH_UPSTREAM=off` there to skip that hop.
