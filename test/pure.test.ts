@@ -4,7 +4,9 @@ import { clientIp, normalizeIp } from "../src/clientIp.js";
 import { safeCloseCode, safeCloseReason } from "../src/closeCode.js";
 import { readConfig } from "../src/config.js";
 import { ago, escapeHtml, renderDashboard } from "../src/dashboard.js";
+import { formatLine } from "../src/log.js";
 import { byPresence, presenceOf } from "../src/presence.js";
+import { pipeOf } from "../src/socketPipe.js";
 import type { DaemonRecord } from "../src/store.js";
 
 const record: DaemonRecord = {
@@ -39,11 +41,57 @@ describe("auth", () => {
 });
 
 describe("clientIp", () => {
-  it("uses the socket unless the proxy is trusted", () => {
-    expect(clientIp({ remoteAddress: "::ffff:10.0.0.2", forwardedFor: "203.0.113.7", trustProxy: false })).toBe("10.0.0.2");
-    expect(clientIp({ remoteAddress: "10.0.0.2", forwardedFor: "203.0.113.7, 10.0.0.1", trustProxy: true })).toBe("203.0.113.7");
-    expect(clientIp({ remoteAddress: "10.0.0.2", forwardedFor: undefined, trustProxy: true })).toBe("10.0.0.2");
+  it("uses the socket unless a proxy is trusted", () => {
+    expect(clientIp({ remoteAddress: "::ffff:10.0.0.2", forwardedFor: "203.0.113.7", trustedProxies: 0 })).toBe("10.0.0.2");
+    expect(clientIp({ remoteAddress: "10.0.0.2", forwardedFor: "203.0.113.7", trustedProxies: 1 })).toBe("203.0.113.7");
+    expect(clientIp({ remoteAddress: "10.0.0.2", forwardedFor: undefined, trustedProxies: 1 })).toBe("10.0.0.2");
     expect(normalizeIp("::1")).toBe("::1");
+  });
+  it("believes only what the trusted proxies wrote, never what the client sent", () => {
+    // One proxy appends the address it saw: everything before it came from the client.
+    expect(clientIp({ remoteAddress: "10.0.0.2", forwardedFor: "198.51.100.9, 203.0.113.7", trustedProxies: 1 })).toBe("203.0.113.7");
+    expect(clientIp({ remoteAddress: "10.0.0.2", forwardedFor: ["198.51.100.9", "203.0.113.7"], trustedProxies: 1 })).toBe("203.0.113.7");
+    // Two proxies: the client is two entries from the right.
+    expect(clientIp({ remoteAddress: "10.0.0.2", forwardedFor: "198.51.100.9, 203.0.113.7, 192.0.2.1", trustedProxies: 2 })).toBe("203.0.113.7");
+    expect(clientIp({ remoteAddress: "10.0.0.2", forwardedFor: "203.0.113.7", trustedProxies: 2 })).toBe("203.0.113.7");
+    expect(clientIp({ remoteAddress: "10.0.0.2", forwardedFor: "::ffff:203.0.113.7", trustedProxies: 1 })).toBe("203.0.113.7");
+    expect(clientIp({ remoteAddress: "10.0.0.2", forwardedFor: "2001:db8::7", trustedProxies: 1 })).toBe("2001:db8::7");
+  });
+  it("falls back to the socket for anything that is not an IP address", () => {
+    expect(clientIp({ remoteAddress: "10.0.0.2", forwardedFor: "x".repeat(5000), trustedProxies: 1 })).toBe("10.0.0.2");
+    expect(clientIp({ remoteAddress: "10.0.0.2", forwardedFor: "203.0.113.7:4242", trustedProxies: 1 })).toBe("10.0.0.2");
+    expect(clientIp({ remoteAddress: "10.0.0.2", forwardedFor: " , ", trustedProxies: 1 })).toBe("10.0.0.2");
+  });
+});
+
+describe("log", () => {
+  it("keeps a line on one line whatever a name holds", () => {
+    const line = formatLine("info", "Mac online: Studio\n2026-01-01T00:00:00.000Z ERROR forged\r\u2028x", { id: "r_1" }, new Date(0));
+    expect(line).toBe("1970-01-01T00:00:00.000Z INFO  Mac online: Studio 2026-01-01T00:00:00.000Z ERROR forged x id=r_1");
+    expect(formatLine("warn", "plain", { reason: "two\nlines" }, new Date(0))).not.toContain("\n");
+    expect(formatLine("warn", "plain", { reason: "bell\u0007" }, new Date(0))).toContain('reason="bell\\u0007"');
+  });
+});
+
+describe("socketPipe", () => {
+  const fake = (bufferedAmount: number, readyState = 1) => {
+    const calls: string[] = [];
+    const ws = { readyState, OPEN: 1, CONNECTING: 0, bufferedAmount, send: (t: string) => void calls.push(`send ${t}`), close: (c: number) => void calls.push(`close ${c}`), terminate: () => void calls.push("terminate") };
+    return { calls, pipe: pipeOf(ws, 100) };
+  };
+  it("sends while the peer keeps up and drops a peer that stopped reading", () => {
+    const ok = fake(100);
+    ok.pipe.send("a");
+    expect(ok.calls).toEqual(["send a"]);
+    const stalled = fake(101);
+    stalled.pipe.send("a");
+    expect(stalled.calls).toEqual(["terminate"]);
+  });
+  it("sends nothing to a socket that is not open", () => {
+    const closing = fake(0, 2);
+    closing.pipe.send("a");
+    closing.pipe.close(1000, "");
+    expect(closing.calls).toEqual([]);
   });
 });
 
@@ -59,10 +107,14 @@ describe("closeCode", () => {
 describe("config", () => {
   it("has defaults and reads keys", () => {
     const c = readConfig({}, "/srv");
-    expect(c).toMatchObject({ port: 8787, host: "0.0.0.0", dataDir: "/srv/data", trustProxy: false });
+    expect(c).toMatchObject({ port: 8787, host: "0.0.0.0", dataDir: "/srv/data", trustedProxies: 0 });
     expect(c.registrationKey).toBeUndefined();
     const d = readConfig({ PORT: "9000", GRENADE_RELAY_DATA: "/data", GRENADE_RELAY_ADMIN_KEY: "a", GRENADE_RELAY_REGISTRATION_KEY: "r", GRENADE_RELAY_TRUST_PROXY: "1" }, "/srv");
-    expect(d).toMatchObject({ port: 9000, dataDir: "/data", adminKey: "a", registrationKey: "r", trustProxy: true });
+    expect(d).toMatchObject({ port: 9000, dataDir: "/data", adminKey: "a", registrationKey: "r", trustedProxies: 1 });
+    expect(readConfig({ GRENADE_RELAY_TRUST_PROXY: "true" }, "/").trustedProxies).toBe(1);
+    expect(readConfig({ GRENADE_RELAY_TRUST_PROXY: "2" }, "/").trustedProxies).toBe(2);
+    expect(readConfig({ GRENADE_RELAY_TRUST_PROXY: "0" }, "/").trustedProxies).toBe(0);
+    expect(() => readConfig({ GRENADE_RELAY_TRUST_PROXY: "yes" }, "/")).toThrow(/number of proxies/);
     expect(() => readConfig({ PORT: "nope" }, "/")).toThrow();
   });
 });

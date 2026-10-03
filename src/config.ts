@@ -22,8 +22,8 @@ export interface RelayConfig {
   registrationKey: string | undefined;
   /** When set, enables GET /v1/daemons and the dashboard. */
   adminKey: string | undefined;
-  /** Take the client IP from X-Forwarded-For (only behind a proxy you run). */
-  trustProxy: boolean;
+  /** How many proxies you run in front of the relay (0: none). The client IP is read that many X-Forwarded-For entries from the right. */
+  trustedProxies: number;
   push: PushConfig;
 }
 
@@ -37,9 +37,19 @@ export function readConfig(env: Record<string, string | undefined>, cwd: string)
     dataDir: dataDir.startsWith("/") ? dataDir : join(cwd, dataDir),
     registrationKey: env["GRENADE_RELAY_REGISTRATION_KEY"] || undefined,
     adminKey: env["GRENADE_RELAY_ADMIN_KEY"] || undefined,
-    trustProxy: env["GRENADE_RELAY_TRUST_PROXY"] === "1" || env["GRENADE_RELAY_TRUST_PROXY"] === "true",
+    trustedProxies: readTrustedProxies(env["GRENADE_RELAY_TRUST_PROXY"]),
     push: readPushConfig(env),
   };
+}
+
+/** Unset, `0` or `false`: none. `1` or `true`: one proxy. A larger number: that many, one behind the other. */
+function readTrustedProxies(value: string | undefined): number {
+  const v = (value ?? "").trim().toLowerCase();
+  if (v === "" || v === "false") return 0;
+  if (v === "true") return 1;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0 || n > 16) throw new Error(`GRENADE_RELAY_TRUST_PROXY must be the number of proxies in front of the relay (0 to 16), got "${value}"`);
+  return n;
 }
 
 function readPushConfig(env: Record<string, string | undefined>): PushConfig {

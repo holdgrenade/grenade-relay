@@ -1,6 +1,8 @@
 /**
  * Every daemon the relay has seen, kept in memory and saved to `<data>/daemons.json` (mode 0600).
  * Writes are debounced; `flush()` writes now. Records never hold a secret or an access key, only their SHA-256.
+ * A save that fails (disk full, folder not writable) never throws: the relay goes on from memory, `onSaveError`
+ * hears the first failure in a row, and the next change tries again.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -25,9 +27,10 @@ const SAVE_DELAY_MS = 1000;
 export class DaemonStore {
   private readonly records = new Map<string, DaemonRecord>();
   private timer: NodeJS.Timeout | null = null;
+  private saveFailing = false;
 
   /** `path` null keeps everything in memory (tests). */
-  constructor(private readonly path: string | null) {
+  constructor(private readonly path: string | null, private readonly onSaveError: (error: unknown) => void = () => {}) {
     this.load();
   }
 
@@ -61,10 +64,17 @@ export class DaemonStore {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     if (!this.path) return;
-    mkdirSync(dirname(this.path), { recursive: true });
-    const tmp = `${this.path}.tmp`;
-    writeFileSync(tmp, JSON.stringify(this.all(), null, 2) + "\n", { mode: 0o600 });
-    renameSync(tmp, this.path);
+    try {
+      mkdirSync(dirname(this.path), { recursive: true });
+      const tmp = `${this.path}.tmp`;
+      writeFileSync(tmp, JSON.stringify(this.all(), null, 2) + "\n", { mode: 0o600 });
+      renameSync(tmp, this.path);
+      this.saveFailing = false;
+    } catch (e) {
+      // This runs in a timer: an error thrown here would end the process.
+      if (!this.saveFailing) this.onSaveError(e);
+      this.saveFailing = true;
+    }
   }
 
   private scheduleSave(): void {

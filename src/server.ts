@@ -11,10 +11,11 @@ import { basicPassword, bearerToken, keyMatches } from "./auth.js";
 import { clientIp } from "./clientIp.js";
 import { renderDashboard } from "./dashboard.js";
 import { RELAY_CONNECT_PATH, RELAY_DAEMONS_PATH, RELAY_DAEMON_PATH, RELAY_PRESENCE_PATH, RELAY_PUSH_PATH, RelayId } from "./frames.js";
-import { Hub, type Admission, type Pipe } from "./hub.js";
+import { Hub, type Admission } from "./hub.js";
 import type { Logger } from "./log.js";
 import type { ApnsSender } from "./push/apnsClient.js";
 import { PushLimiter } from "./push/pushLimiter.js";
+import { pipeOf } from "./socketPipe.js";
 import { MAX_PUSH_BODY_BYTES, handlePush } from "./push/pushRoute.js";
 import { HOPS_HEADER, type Upstream } from "./push/upstream.js";
 import { DaemonStore } from "./store.js";
@@ -40,7 +41,8 @@ export interface RelayOptions {
   dataFile: string | null;
   registrationKey?: string | undefined;
   adminKey?: string | undefined;
-  trustProxy?: boolean;
+  /** How many proxies you run in front of the relay; the client IP is read that many X-Forwarded-For entries from the right. */
+  trustedProxies?: number;
   push?: PushOptions;
   log: Logger;
   version: string;
@@ -66,10 +68,10 @@ const REFUSALS: Record<Exclude<Admission, "ok">, [number, string]> = {
 
 export async function startRelay(o: RelayOptions): Promise<RunningRelay> {
   const now = o.now ?? Date.now;
-  const store = new DaemonStore(o.dataFile);
+  const store = new DaemonStore(o.dataFile, (e) => o.log.error("Could not save the Macs' records; going on from memory", { file: o.dataFile, error: e }));
   const hub = new Hub({ store, log: o.log, registrationKey: o.registrationKey, now });
   const ipOf = (req: IncomingMessage) =>
-    clientIp({ remoteAddress: req.socket.remoteAddress, forwardedFor: req.headers["x-forwarded-for"], trustProxy: o.trustProxy ?? false });
+    clientIp({ remoteAddress: req.socket.remoteAddress, forwardedFor: req.headers["x-forwarded-for"], trustedProxies: o.trustedProxies ?? 0 });
 
   const http: Server = createServer((req, res) => {
     try {
@@ -99,7 +101,8 @@ export async function startRelay(o: RelayOptions): Promise<RunningRelay> {
   }
 
   function route(req: IncomingMessage, res: ServerResponse): void {
-    const path = new URL(req.url ?? "/", "http://relay").pathname;
+    const path = pathOf(req);
+    if (path === null) return json(res, 400, { error: "bad_request" });
     if (req.method === "POST" && path === RELAY_PUSH_PATH) return void push(req, res);
     if (req.method !== "GET" && req.method !== "HEAD") return json(res, 405, { error: "method_not_allowed" });
     if (path === "/health") return json(res, 200, { ok: true, version: o.version });
@@ -118,7 +121,7 @@ export async function startRelay(o: RelayOptions): Promise<RunningRelay> {
         res.writeHead(401, { "WWW-Authenticate": 'Basic realm="Grenade relay", charset="UTF-8"', "Content-Type": "text/plain" });
         return void res.end("Sign in with any user name and the relay's admin key.\n");
       }
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", ...DASHBOARD_HEADERS });
       return void res.end(renderDashboard(hub.list(), now(), o.version));
     }
     json(res, 404, { error: "not_found" });
@@ -127,8 +130,20 @@ export async function startRelay(o: RelayOptions): Promise<RunningRelay> {
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
   const lastPong = new WeakMap<WebSocket, number>();
 
+  // Node hands an upgrade's socket over with no error listener, and an exception here would be uncaught:
+  // either would end the process, so nothing in this handler may throw and every refusal listens for errors.
   http.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-    const path = new URL(req.url ?? "/", "http://relay").pathname;
+    try {
+      upgrade(req, socket, head);
+    } catch (e) {
+      o.log.error("Upgrade failed", { error: e });
+      socket.destroy();
+    }
+  });
+
+  function upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    const path = pathOf(req);
+    if (path === null) return refuseUpgrade(socket, 400, "Bad Request");
     const ip = ipOf(req);
     if (path === RELAY_DAEMON_PATH) {
       return wss.handleUpgrade(req, socket, head, (ws) => acceptDaemon(ws, ip, bearerToken(req.headers.authorization)));
@@ -140,7 +155,7 @@ export async function startRelay(o: RelayOptions): Promise<RunningRelay> {
       return wss.handleUpgrade(req, socket, head, (ws) => acceptPhone(ws, id, ip));
     }
     refuseUpgrade(socket, 404, "Not Found");
-  });
+  }
 
   function acceptDaemon(ws: WebSocket, ip: string | undefined, authorization: string | null): void {
     track(ws);
@@ -229,18 +244,26 @@ export async function startRelay(o: RelayOptions): Promise<RunningRelay> {
   };
 }
 
-function pipeOf(ws: WebSocket): Pipe {
-  return {
-    send: (text) => {
-      if (ws.readyState === ws.OPEN) ws.send(text);
-    },
-    close: (code, reason) => {
-      if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) ws.close(code, reason);
-    },
-  };
+/** The dashboard runs no script and loads nothing: say so to the browser, and keep it out of frames. */
+const DASHBOARD_HEADERS = {
+  "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+};
+
+/** The path of a request, or null when its target is not one a URL can hold (`//`, say). Never throws. */
+function pathOf(req: IncomingMessage): string | null {
+  try {
+    return new URL(req.url ?? "/", "http://relay").pathname;
+  } catch {
+    return null;
+  }
 }
 
 function refuseUpgrade(socket: Duplex, status: number, text: string): void {
+  // The client may be gone already; a failed write must not become an unhandled error.
+  socket.on("error", () => socket.destroy());
   const body = JSON.stringify({ error: text.toLowerCase().replace(/ /g, "_") });
   socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
 }
@@ -272,6 +295,6 @@ function readCapped(req: IncomingMessage, max: number): Promise<string> {
 
 function json(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
   const text = JSON.stringify(body);
-  res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(text), "Cache-Control": "no-store", ...headers });
+  res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(text), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", ...headers });
   res.end(text);
 }

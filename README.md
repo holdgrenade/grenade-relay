@@ -24,7 +24,7 @@ Push notifications pass through a relay too, sealed for the phone. See "Push not
 You need a server with Docker, a public IP (a DNS name is optional), and ports 80 and 443 open.
 
 ```bash
-git clone <this repo> grenade-relay && cd grenade-relay
+git clone https://github.com/holdgrenade/grenade-relay.git && cd grenade-relay
 cp .env.example .env        # set RELAY_HOST to the public IP (or a DNS name); optionally the keys
 docker compose up -d
 curl https://203.0.113.7/health
@@ -37,9 +37,12 @@ Caddy gets and renews the certificate from Let's Encrypt, for an IP as well as f
 Node 22 or newer. Put it behind anything that terminates TLS (Caddy, nginx, a load balancer) and passes WebSocket upgrades.
 
 ```bash
+git clone https://github.com/holdgrenade/grenade-relay.git && cd grenade-relay
 npm ci && npm run build
 GRENADE_RELAY_ADMIN_KEY=$(openssl rand -hex 24) PORT=8787 npm start
 ```
+
+If that proxy adds the client's address to `X-Forwarded-For`, set `GRENADE_RELAY_TRUST_PROXY=1` so the relay records each Mac's real address and limits pushes per sender. Never set it on a relay that clients can reach directly: they could then claim any address.
 
 ## Settings
 
@@ -50,7 +53,7 @@ GRENADE_RELAY_ADMIN_KEY=$(openssl rand -hex 24) PORT=8787 npm start
 | `GRENADE_RELAY_DATA` | `./data` | Folder for `daemons.json` (records of Macs; mode 0600). |
 | `GRENADE_RELAY_REGISTRATION_KEY` | unset | When set, only Macs that present this key may register. Use it for private and company relays. Unset means anyone's Mac may use the relay. |
 | `GRENADE_RELAY_ADMIN_KEY` | unset | Turns on the dashboard at `/` (HTTP Basic, any user name, this password) and `GET /v1/daemons`. Unset means both answer 404. |
-| `GRENADE_RELAY_TRUST_PROXY` | unset | `1` takes client IPs from `X-Forwarded-For`. Only set it behind a proxy you run (the compose file does). |
+| `GRENADE_RELAY_TRUST_PROXY` | unset | The number of proxies you run in front of the relay, usually `1` (the compose file sets it). The client IP is then read that many entries from the right of `X-Forwarded-For`, which is what your proxies wrote; anything a client put there is ignored. Unset or `0` uses the connection's own address. |
 | `GRENADE_RELAY_PUSH_UPSTREAM` | the main relay | The relay that pushes are passed on to. `off` turns push off on this relay. Ignored when an APNs key is set. |
 | `GRENADE_RELAY_PUSH_UPSTREAM_KEY` | unset | The upstream relay's registration key, when it requires one. |
 | `GRENADE_RELAY_APNS_KEY` | unset | The text of an APNs key (`.p8`), for a relay that sends pushes itself. Newlines may be written as `\n`. |
@@ -103,14 +106,34 @@ A push that was passed on once is never passed on again, so two relays that poin
 
 With `GRENADE_RELAY_ADMIN_KEY` set, open `https://<RELAY_HOST>/` and sign in with any user name and the admin key. It lists every Mac on the relay: online or last seen, public IP, local IPs, version. It refreshes every 15 seconds.
 
+## Running one safely
+
+- **A relay for yourself or a team:** set `GRENADE_RELAY_REGISTRATION_KEY`. Without it the relay is open: anyone's Mac may register on it and send pushes through it.
+- **The admin key** guards the list of every Mac with its IP addresses. Make it long and random (`openssl rand -hex 24`), and keep the relay behind TLS so it never travels in the clear.
+- **Limits:** the relay caps phones per Mac (8), the size of a message (4 MB), what may wait for a peer that stopped reading (16 MB) and pushes per sender and per phone. It does not limit how many connections or new Macs one address may open. For an open relay on the public internet, add connection limits at the proxy in front of it.
+- **Keys stay out of the repo.** `.env`, `*.p8`, `*.pem` and `*.key` are ignored by git; an APNs key is read once at start and never logged.
+
+Found a security problem? [Report it privately](https://github.com/holdgrenade/grenade-relay/security/advisories/new). What a relay's operator can and cannot do to the people using it is on [holdgrenade.com/security](https://www.holdgrenade.com/security).
+
 ## How it works
 
-The wire contract is in `grenade-protocol/PROTOCOL.md`, under "Remote access (relay)". In short:
+The relay's HTTP and WebSocket API is documented on [holdgrenade.com/relay](https://www.holdgrenade.com/relay). The full wire contract is `PROTOCOL.md` in `grenade-protocol`, which is not public; `src/frames.ts` mirrors the relay's part of it. In short:
 
 - A Mac holds one WebSocket to `/v1/daemon`. It registers a random relay id plus a secret; the first Mac to register an id owns it. The relay pings every 15 s and marks the Mac offline after 30 s of silence.
 - A phone opens `/v1/connect/<relay id>` with its access key. The relay tells the Mac `open`, then forwards `data` both ways until either side closes.
 - `GET /v1/presence/<relay id>` (same access key) answers whether the Mac is online and its IPs, even while it is off.
-- `POST /v1/push` sends one sealed push, or one board push, to a phone. It is in `PROTOCOL.md` under "Push notifications" and "Mac board".
+- `POST /v1/push` sends one sealed push, or one board push, to a phone.
+
+## Develop
+
+```bash
+npm install
+npm test             # unit tests and the whole relay over real sockets, on free ports
+npm run typecheck
+npm run dev          # from source, on :8787
+```
+
+`CLAUDE.md` has the layout of the code and the rules it keeps. Problems and questions about any part of Grenade: [issues on `grenade-cli`](https://github.com/holdgrenade/grenade-cli/issues).
 
 ## License
 

@@ -1,5 +1,6 @@
 // End to end over real sockets: a fake daemon and a fake phone talk through a relay on port 0.
 import { mkdtempSync } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -22,7 +23,7 @@ afterEach(async () => {
   relay = null;
 });
 
-async function start(opts: { registrationKey?: string; pingIntervalMs?: number; deadAfterMs?: number } = {}) {
+async function start(opts: { registrationKey?: string; pingIntervalMs?: number; deadAfterMs?: number; trustedProxies?: number } = {}) {
   relay = await startRelay({
     port: 0, host: "127.0.0.1", dataFile: join(mkdtempSync(join(tmpdir(), "relay-")), "daemons.json"),
     adminKey: ADMIN, log: silentLogger, version: "test", ...opts,
@@ -80,6 +81,23 @@ async function daemonOnline(host: string, headers: Record<string, string> = {}) 
 }
 
 const get = (host: string, path: string, headers: Record<string, string> = {}) => fetch(`http://${host}${path}`, { headers });
+
+const UPGRADE_HEADERS = "Host: relay\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+
+/** Sends one request exactly as written and answers with the status line. With `reset`, hangs up at once instead. */
+function raw(host: string, request: string, reset = false): Promise<string> {
+  return new Promise((resolve) => {
+    const [address, port] = host.split(":") as [string, string];
+    let answer = "";
+    const socket = connect(Number(port), address, () => {
+      socket.write(request);
+      if (reset) socket.resetAndDestroy();
+    });
+    socket.on("data", (d) => (answer += d.toString()));
+    socket.on("error", () => {});
+    socket.on("close", () => resolve(answer.split("\r\n")[0] ?? ""));
+  });
+}
 
 describe("relay server", () => {
   it("serves health", async () => {
@@ -183,7 +201,30 @@ describe("relay server", () => {
     expect(noAuth.headers.get("www-authenticate")).toContain("Basic");
     const page = await get(host, "/", { Authorization: "Basic " + Buffer.from(`admin:${ADMIN}`).toString("base64") });
     expect(page.status).toBe(200);
+    expect(page.headers.get("content-security-policy")).toContain("default-src 'none'");
+    expect(page.headers.get("x-frame-options")).toBe("DENY");
     expect(await page.text()).toContain("MacBook Pro");
+  });
+
+  it("answers 400 to a request target that is not a path, and keeps running", async () => {
+    const host = await start();
+    expect(await raw(host, `GET // HTTP/1.1\r\n${UPGRADE_HEADERS}`)).toBe("HTTP/1.1 400 Bad Request");
+    expect(await raw(host, "GET // HTTP/1.1\r\nHost: relay\r\nConnection: close\r\n\r\n")).toBe("HTTP/1.1 400 Bad Request");
+    expect((await get(host, "/health")).status).toBe(200);
+  });
+
+  it("survives clients that hang up while an upgrade is being refused", async () => {
+    const host = await start();
+    for (let i = 0; i < 40; i++) await raw(host, `GET /v1/connect/${ID} HTTP/1.1\r\n${UPGRADE_HEADERS}`, true);
+    await new Promise((r) => setTimeout(r, 50));
+    expect((await get(host, "/health")).status).toBe(200);
+  });
+
+  it("takes a Mac's address from its proxy, not from what the client claims", async () => {
+    const host = await start({ trustedProxies: 1 });
+    // A proxy appends the address it saw; the entry before it is the client's own claim.
+    const d = await daemonOnline(host, { "X-Forwarded-For": "198.51.100.9, 203.0.113.7" });
+    expect(await d.nextFrame(0)).toEqual({ type: "registered", publicIp: "203.0.113.7" });
   });
 
   it("hides the admin endpoints when no admin key is set", async () => {

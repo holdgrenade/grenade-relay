@@ -29,7 +29,7 @@ try {
     dataFile: join(config.dataDir, "daemons.json"),
     registrationKey: config.registrationKey,
     adminKey: config.adminKey,
-    trustProxy: config.trustProxy,
+    trustedProxies: config.trustedProxies,
     push: pushOptions(config.push),
     log,
     version: VERSION,
@@ -38,7 +38,7 @@ try {
     data: config.dataDir,
     registration: config.registrationKey ? "key required" : "open",
     dashboard: config.adminKey ? "on" : "off",
-    trustProxy: config.trustProxy,
+    trustedProxies: config.trustedProxies,
     push: config.push.apns ? "apns" : config.push.upstream ? `upstream ${config.push.upstream}` : "off",
   });
   const stop = async (signal: string) => {

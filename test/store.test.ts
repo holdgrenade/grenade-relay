@@ -19,6 +19,18 @@ describe("DaemonStore", () => {
     expect(new DaemonStore(path).get("r_a")?.name).toBe("r_a");
   });
 
+  it("goes on from memory when a save fails, and says so once", () => {
+    // The folder's parent is a file, so nothing can be written there.
+    const errors: unknown[] = [];
+    const s = new DaemonStore("/dev/null/data/daemons.json", (e) => errors.push(e));
+    s.put(rec("r_a", "2026-09-27T12:00:00.000Z"));
+    expect(() => s.flush()).not.toThrow();
+    s.put(rec("r_b", "2026-09-27T12:00:00.000Z"));
+    s.flush();
+    expect(errors).toHaveLength(1);
+    expect(s.all()).toHaveLength(2);
+  });
+
   it("forgets records not seen for 90 days unless live", () => {
     const s = new DaemonStore(null);
     const now = Date.parse("2026-09-27T12:00:00.000Z");

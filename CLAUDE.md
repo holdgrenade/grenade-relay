@@ -1,6 +1,6 @@
 # grenade-relay
 
-The open-source relay that joins a Grenade phone to its Mac when they are on different networks. Macs (`grenaded`) dial out to `/v1/daemon`; phones dial `/v1/connect/<relay id>`; the relay forwards frames and reports presence (online, last seen, public and local IPs). Anyone can host one; we run the main one on Heroku at `https://grenade-relay-7a47b5a07a7d.herokuapp.com` (see "Main instance"). It also carries push notifications: Macs post sealed pushes, and board pushes for the Mac board's Live Activity, to `POST /v1/push` and the relay hands them to Apple's push service, or to another relay that can. Read `../grenade-protocol/PROTOCOL.md` "Remote access (relay)", "Push notifications" and "Mac board" ("Board push route") first: this project implements exactly that.
+The open-source relay that joins a Grenade phone to its Mac when they are on different networks. Macs (`grenaded`) dial out to `/v1/daemon`; phones dial `/v1/connect/<relay id>`; the relay forwards frames and reports presence (online, last seen, public and local IPs). Anyone can host one; we run the main one at `https://relay.holdgrenade.com` (see "Main instance"). **This repo is public** (since 2026-10-03): no secrets, no private paths and no personal data, in files or in commit messages. It also carries push notifications: Macs post sealed pushes, and board pushes for the Mac board's Live Activity, to `POST /v1/push` and the relay hands them to Apple's push service, or to another relay that can. Read `../grenade-protocol/PROTOCOL.md` "Remote access (relay)", "Push notifications" and "Mac board" ("Board push route") first: this project implements exactly that.
 
 ## Stack
 
@@ -26,7 +26,7 @@ docker compose up -d # with .env from .env.example
 | `src/config.ts` | Pure: environment → `RelayConfig` |
 | `src/server.ts` | HTTP routes, WebSocket upgrades (refuses with 401/404/429/503 before upgrading), ping/pong liveness, hourly GC |
 | `src/hub.ts` | Live state, transport-agnostic: daemon links, registration (TOFU claim), phone pipes, routing `open`/`data`/`close`, presence. Tests drive it with fake sockets |
-| `src/store.ts` | `DaemonStore`: records in memory, debounced atomic save to `<data>/daemons.json` (0600), forgets records unseen for 90 days |
+| `src/store.ts` | `DaemonStore`: records in memory, debounced atomic save to `<data>/daemons.json` (0600), forgets records unseen for 90 days. A save that fails is logged once and never thrown |
 | `src/frames.ts` | Mirror of `grenade-protocol/src/relay.ts` (schemas, paths, close codes) and of the push route's bodies in `src/push.ts` (`PushRequest`, `PushError`) and `src/board.ts` (`BoardPushRequest`, strict here); `parsePushRouteRequest` picks the kind |
 | `src/push/pushRoute.ts` | `POST /v1/push`, transport-agnostic: key check, size, parse, topic, limits, then send, pass upstream, or 503. Tests drive it with a fake sender |
 | `src/push/pushPayload.ts` | Pure: a push request → the APNs body (fallback alert + sealed content) and headers |
@@ -39,7 +39,8 @@ docker compose up -d # with .env from .env.example
 | `src/auth.ts` | Pure: SHA-256 hex, timing-safe compare, Bearer/Basic parsing, `keyMatches` |
 | `src/presence.ts` | Pure: record + online-since → `Presence`; sort order |
 | `src/dashboard.ts` | Pure: the admin HTML page (escaped, self-contained, light/dark, refresh 15 s) |
-| `src/clientIp.ts` | Pure: socket address, or first `X-Forwarded-For` when the proxy is trusted |
+| `src/clientIp.ts` | Pure: socket address, or the `X-Forwarded-For` entry your proxies wrote (`trustedProxies` from the right); never an entry the client sent, never a string that is not an IP |
+| `src/socketPipe.ts` | `pipeOf`: a WebSocket as the hub's `Pipe`; drops a peer once `MAX_BUFFERED_BYTES` (16 MB) wait for it |
 | `src/closeCode.ts` | Pure: close codes/reasons that `ws` accepts |
 | `src/log.ts`, `src/version.ts` | Logger (stderr, `key=value`), version from package.json |
 | `test/fixtures/` | Copies of the relay fixtures from `../grenade-protocol/fixtures` |
@@ -52,8 +53,8 @@ docker compose up -d # with .env from .env.example
 
 - Served at `https://relay.holdgrenade.com` (`OFFICIAL_RELAY_URL`; a Cloudflare DNS record pointing at Heroku's DNS target). The old `https://grenade-relay-7a47b5a07a7d.herokuapp.com` still reaches the same app, so Macs that stored it keep working. The public website does not say the relay runs on Heroku; keep it that way.
 - App `grenade-relay` (Croissant Heroku account), one Basic `web` dyno running `Procfile` (`node dist/main.js`); Heroku's Node buildpack runs `npm run build`. Deploy: `git push heroku main`. Logs: `heroku logs -t -a grenade-relay`.
-- Config vars: `GRENADE_RELAY_TRUST_PROXY=1`, `GRENADE_RELAY_ADMIN_KEY` (read it with `heroku config:get`), no registration key (open relay). Heroku terminates TLS, so Caddy is not used there.
-- Push: the main relay is the one that must hold the APNs key, and it is **not set yet**. Setting `GRENADE_RELAY_APNS_KEY` (the `.p8` text; `\n` for newlines is fine), `GRENADE_RELAY_APNS_KEY_ID` and `GRENADE_RELAY_APNS_TEAM_ID` is Adam's to do; never create, read or set them on Adam's behalf. Until then the main relay's default upstream is itself, so it answers `503 push_unavailable` to every push (one hop, then the hop guard stops it). Set `GRENADE_RELAY_PUSH_UPSTREAM=off` there to skip that hop.
+- Config vars: `GRENADE_RELAY_TRUST_PROXY=1` (one proxy, Heroku's router, which appends the client's address to whatever `X-Forwarded-For` the client sent; so only the last entry is believed), `GRENADE_RELAY_ADMIN_KEY` (read it with `heroku config:get`), no registration key (open relay). Heroku terminates TLS, so Caddy is not used there.
+- Push: the main relay is the one that holds the APNs key (`GRENADE_RELAY_APNS_KEY`, the `.p8` text with `\n` for newlines; `GRENADE_RELAY_APNS_KEY_ID`; `GRENADE_RELAY_APNS_TEAM_ID`), set since 2026-10-03. They are Adam's: never create, read or set them on Adam's behalf.
 - Keep it at **one dyno**: all state is in one process. The disk is ephemeral, so `daemons.json` is lost on each restart (at least daily). Macs re-register within seconds with their access lists; a Mac that is off drops out of presence until it reconnects.
 - The router closes connections idle for 55 s; the 15 s pings keep links open.
 
@@ -67,7 +68,10 @@ docker compose up -d # with .env from .env.example
 - Phones are checked before the upgrade: 404 unknown id, 401 access not in the daemon's list, 503 daemon offline, 429 over 8 pipes. The access list is persisted, so presence answers while the Mac is off.
 - Every socket is pinged every 15 s and terminated after 30 s without a pong. A dropped daemon link closes its phone pipes with 4503 and sets `lastSeen`.
 - `GRENADE_RELAY_REGISTRATION_KEY` unset = open relay (the main one); set = private. `GRENADE_RELAY_ADMIN_KEY` unset = no dashboard, no list (404).
-- Max WebSocket message 4 MB (screen frames with colors).
+- Max WebSocket message 4 MB (screen frames with colors). A socket with more than 16 MB waiting to be read is terminated (`socketPipe.ts`): the relay never buffers without bound for a peer that stopped reading.
+- **Nothing a stranger sends may end the process.** Node gives an upgrade's socket to the `upgrade` handler with no error listener, and an exception there is uncaught: the handler is wrapped, a request target that is not a path (`//`) is answered 400 (`pathOf`), and `refuseUpgrade` listens for the socket's error before it writes. Both ended the relay with one request until 1.1.1; `server.test.ts` sends them. The same goes for timers: `DaemonStore.flush` runs in one and catches a failed save (full disk, folder not writable), which used to end the process and again on every restart.
+- **A client's address is what our proxy saw, never what the client says.** `GRENADE_RELAY_TRUST_PROXY` is the number of proxies in front; the address is read that many `X-Forwarded-For` entries from the right. The first entry is the client's own claim behind any proxy that appends (Heroku's router does), and believing it let anyone pick a new sender address per push and so skip the per-sender limit (until 1.1.1).
+- A log sentence may quote a Mac's name, so `formatLine` turns control characters in it into spaces, and writes a value that holds one JSON-quoted: nothing a client sends can forge a log line.
 - **The push route is blind and keeps nothing.** `c` is sealed to the phone; never try to open it, and never add a push feature that needs the session, the Mac or the text in the clear. No device token is stored: the daemon sends it with every push, so a restart loses nothing.
 - **A device token is never logged**, nor `e` or `c`. A log line names a phone by the first 8 hex of `sha256(deviceToken)`. `pushRoute.test.ts` checks every answer's log lines for it.
 - The APNs key is read once at start and never printed; the start-up line only says `push=apns`, `push=upstream <url>` or `push=off`. A key without key id and team id stops the start with a message that names the missing setting.
@@ -86,7 +90,11 @@ docker compose up -d # with .env from .env.example
 
 ## Known gaps
 
-- No rate limiting beyond 8 pipes per daemon, the 4 MB message cap and the push route's limits. Put the public relay behind a proxy with connection limits if abuse shows up.
+- No rate limiting beyond 8 pipes per daemon, the 4 MB message cap, the 16 MB buffer cap and the push route's limits. Put the public relay behind a proxy with connection limits if abuse shows up.
+- On an open relay anyone may register new relay ids without limit, each a record of up to 1000 access hashes kept for 90 days, and the whole store is rewritten on every change: a flood of registrations fills memory and disk. A limit per address needs a way to tell a daemon "too many" (a close code or error code in the protocol), which does not exist yet.
+- The first link to register an id owns it, and the main relay loses its records at every restart (ephemeral disk). Someone who knows a Mac's relay id (128 random bits, known to its paired phones) could register it first after a restart and keep that Mac off the relay (`id_taken`). They could read nothing: phones pin the Mac's key.
+- The admin key has no limit on wrong guesses; it relies on being long and random.
+- The push limits count per IP address, so an IPv6 sender with a whole /64 has many. The main relay is reached over IPv4 only.
 - The push route on an open relay takes a push from anyone who knows a device token. Tokens are 32 random bytes that only a phone, the Macs it paired with and the relay ever see, and the limits cap what a leaked one is worth. A relay that passes pushes upstream is one sender to the upstream, so all its Macs share 60 a minute there.
 - Push limits are per process and in memory, like everything else here.
 - One process holds all state in memory; it does not scale out across instances.
