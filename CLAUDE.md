@@ -1,6 +1,6 @@
 # grenade-relay
 
-The open-source relay that joins a Grenade phone to its Mac when they are on different networks. Macs (`grenaded`) dial out to `/v1/daemon`; phones dial `/v1/connect/<relay id>`; the relay forwards frames and reports presence (online, last seen, public and local IPs). Anyone can host one; we run the main one on Heroku at `https://grenade-relay-7a47b5a07a7d.herokuapp.com` (see "Main instance"). It also carries push notifications: Macs post sealed pushes to `POST /v1/push` and the relay hands them to Apple's push service, or to another relay that can. Read `../grenade-protocol/PROTOCOL.md` "Remote access (relay)" and "Push notifications" first: this project implements exactly that.
+The open-source relay that joins a Grenade phone to its Mac when they are on different networks. Macs (`grenaded`) dial out to `/v1/daemon`; phones dial `/v1/connect/<relay id>`; the relay forwards frames and reports presence (online, last seen, public and local IPs). Anyone can host one; we run the main one on Heroku at `https://grenade-relay-7a47b5a07a7d.herokuapp.com` (see "Main instance"). It also carries push notifications: Macs post sealed pushes, and board pushes for the Mac board's Live Activity, to `POST /v1/push` and the relay hands them to Apple's push service, or to another relay that can. Read `../grenade-protocol/PROTOCOL.md` "Remote access (relay)", "Push notifications" and "Mac board" ("Board push route") first: this project implements exactly that.
 
 ## Stack
 
@@ -27,9 +27,10 @@ docker compose up -d # with .env from .env.example
 | `src/server.ts` | HTTP routes, WebSocket upgrades (refuses with 401/404/429/503 before upgrading), ping/pong liveness, hourly GC |
 | `src/hub.ts` | Live state, transport-agnostic: daemon links, registration (TOFU claim), phone pipes, routing `open`/`data`/`close`, presence. Tests drive it with fake sockets |
 | `src/store.ts` | `DaemonStore`: records in memory, debounced atomic save to `<data>/daemons.json` (0600), forgets records unseen for 90 days |
-| `src/frames.ts` | Mirror of `grenade-protocol/src/relay.ts` (schemas, paths, close codes) and of the push route's bodies in `src/push.ts` (`PushRequest`, `PushError`) |
+| `src/frames.ts` | Mirror of `grenade-protocol/src/relay.ts` (schemas, paths, close codes) and of the push route's bodies in `src/push.ts` (`PushRequest`, `PushError`) and `src/board.ts` (`BoardPushRequest`, strict here); `parsePushRouteRequest` picks the kind |
 | `src/push/pushRoute.ts` | `POST /v1/push`, transport-agnostic: key check, size, parse, topic, limits, then send, pass upstream, or 503. Tests drive it with a fake sender |
 | `src/push/pushPayload.ts` | Pure: a push request → the APNs body (fallback alert + sealed content) and headers |
+| `src/push/boardPayload.ts` | Pure: a board push → the Live Activity APNs payload and headers (`liveactivity`, times from `at`), as in `board.examples.json` |
 | `src/push/pushResult.ts` | Pure: what APNs answered → what the route answers (`replyForApns`, `refusal`) |
 | `src/push/pushLimiter.ts` | `PushLimiter`: 60 a minute per sender address, 20 per phone; fixed windows, `now` passed in, ended windows swept |
 | `src/push/apnsToken.ts` | Pure: the APNs provider token (ES256 JWT from the `.p8` key), `ProviderTokens` reuses one for 50 minutes |
@@ -71,6 +72,7 @@ docker compose up -d # with .env from .env.example
 - **A device token is never logged**, nor `e` or `c`. A log line names a phone by the first 8 hex of `sha256(deviceToken)`. `pushRoute.test.ts` checks every answer's log lines for it.
 - The APNs key is read once at start and never printed; the start-up line only says `push=apns`, `push=upstream <url>` or `push=off`. A key without key id and team id stops the start with a message that names the missing setting.
 - A push is passed upstream at most once: a request that carries `X-Grenade-Push-Hops` is sent by this relay or refused with 503, never passed on. A relay with its own key never passes anything on and checks the topic; one that only passes on does not.
+- **A board push is readable by design and carries nothing readable.** A Live Activity push cannot be sealed, so `BoardPushRequest` is strict (unknown keys refused at every level): opaque 16-hex keys, four statuses, integer times. Never loosen it or add a field that names a session, a Mac or text. It shares the sealed push's answers, limits (same per-sender and per-token counts, keyed by the activity's push token), topic check and upstream rule, and its push token is never logged either.
 - Push bodies are capped at 8 KB (`MAX_PUSH_BODY_BYTES`); the reader stops a little past it and the route answers 413.
 - Pure modules take no I/O and no clock; inject `now`.
 
@@ -78,7 +80,7 @@ docker compose up -d # with .env from .env.example
 
 1. Change `../grenade-protocol` first (`PROTOCOL.md`, `src/relay.ts`, fixtures).
 2. Mirror it in `src/frames.ts`.
-3. Copy the fixtures: `cp ../grenade-protocol/fixtures/{relay.*,http.relay.*,e2e.*}.json test/fixtures/` (the push route's bodies are `http.relay.push.*`). The fixture test fails until every frame type has one.
+3. Copy the fixtures: `cp ../grenade-protocol/fixtures/{relay.*,http.relay.*,e2e.*,board.examples}.json test/fixtures/` (the push route's bodies are `http.relay.push.*`; `board.examples.json` holds what a board push sends to APNs). The fixture test fails until every frame type has one.
 4. Update the daemon (`grenade-cli/src/relay/`) and the phone clients to match.
 5. Update the public docs: this `README.md` and `../grenade-website/src/pages/relay.astro` (self-hosting guide + API reference).
 

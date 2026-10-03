@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { sha256hex } from "../src/auth.js";
-import { DaemonList, E2EHello, Presence, PushError, PushRequest, PushResponse, RelayDaemonFrame, RelayServerFrame } from "../src/frames.js";
+import { BoardPushRequest, DaemonList, E2EHello, Presence, PushError, PushRequest, PushResponse, RelayDaemonFrame, RelayServerFrame } from "../src/frames.js";
 
 // Copies of ../grenade-protocol/fixtures. Re-copy them when the protocol changes.
 const dir = join(import.meta.dirname, "fixtures");
@@ -33,6 +33,8 @@ describe("protocol fixtures", () => {
     expect(PushRequest.safeParse(read("http.relay.push.request.json")).success).toBe(true);
     expect(PushResponse.safeParse(read("http.relay.push.response.json")).success).toBe(true);
     expect(PushError.safeParse(read("http.relay.push.error.json")).success).toBe(true);
+    expect(BoardPushRequest.safeParse(read("http.relay.push.board.request.json")).success).toBe(true);
+    expect(BoardPushRequest.safeParse(read("board.examples.json").request).success).toBe(true);
   });
 
   it("hashes an access key the way the daemon does", () => {

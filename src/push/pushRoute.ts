@@ -1,10 +1,11 @@
 /**
  * `POST /v1/push` (PROTOCOL.md "Push route"), transport-agnostic: the server hands over what it read, this decides.
- * The route keeps nothing and reads nothing it cannot: `c` is sealed to the phone. A device token never reaches a
- * log line; `phone` in the logs is the first 8 hex of its SHA-256.
+ * The route keeps nothing and reads nothing it cannot: `c` is sealed to the phone. A board push (`kind: "board"`,
+ * PROTOCOL.md "Board push route") goes the same way, to a Live Activity's push token. A device or push token never
+ * reaches a log line; `phone` in the logs is the first 8 hex of its SHA-256.
  */
 import { keyMatches, sha256hex } from "../auth.js";
-import { PushRequest } from "../frames.js";
+import { isBoardPush, parsePushRouteRequest, pushAddress, type PushRouteRequest } from "../frames.js";
 import type { Logger } from "../log.js";
 import type { ApnsSender } from "./apnsClient.js";
 import type { PushLimiter } from "./pushLimiter.js";
@@ -41,8 +42,9 @@ export async function handlePush(input: PushRouteInput, d: PushRouteDeps): Promi
   if (Buffer.byteLength(input.rawBody, "utf8") > MAX_PUSH_BODY_BYTES) return refused(d, "too_large", input);
   const request = parse(input.rawBody);
   if (!request) return refused(d, "bad_request", input);
-  const tokenHash = sha256hex(request.deviceToken);
+  const tokenHash = sha256hex(pushAddress(request));
   const phone = tokenHash.slice(0, 8);
+  const kind = isBoardPush(request) ? "board" : "sealed";
   if (d.apns && !d.topics.includes(request.topic)) return refused(d, "topic_not_served", input, phone);
   if (!d.apns && (!d.upstream || input.hops)) return refused(d, "push_unavailable", input, phone);
 
@@ -55,26 +57,23 @@ export async function handlePush(input: PushRouteInput, d: PushRouteDeps): Promi
   if (d.apns) {
     const result = await d.apns.send(request);
     const reply = replyForApns(result);
-    if (reply.status === 200) d.log.debug("Sent a push", { phone, environment: request.environment });
-    else d.log.info("A push was not delivered", { phone, environment: request.environment, apnsStatus: result.status, reason: result.reason, answered: reply.status });
+    if (reply.status === 200) d.log.debug("Sent a push", { phone, kind, environment: request.environment });
+    else d.log.info("A push was not delivered", { phone, kind, environment: request.environment, apnsStatus: result.status, reason: result.reason, answered: reply.status });
     return reply;
   }
   const upstream = d.upstream as Upstream;
   const reply = await upstream.forward(input.rawBody);
-  if (reply.status === 200) d.log.debug("Passed a push upstream", { phone, upstream: upstream.url });
-  else d.log.info("The upstream relay did not deliver a push", { phone, upstream: upstream.url, answered: reply.status });
+  if (reply.status === 200) d.log.debug("Passed a push upstream", { phone, kind, upstream: upstream.url });
+  else d.log.info("The upstream relay did not deliver a push", { phone, kind, upstream: upstream.url, answered: reply.status });
   return reply;
 }
 
-function parse(rawBody: string): PushRequest | null {
-  let json: unknown;
+function parse(rawBody: string): PushRouteRequest | null {
   try {
-    json = JSON.parse(rawBody);
+    return parsePushRouteRequest(JSON.parse(rawBody));
   } catch {
     return null;
   }
-  const r = PushRequest.safeParse(json);
-  return r.success ? r.data : null;
 }
 
 function refused(d: PushRouteDeps, error: Parameters<typeof refusal>[0], input: PushRouteInput, phone?: string): RouteReply {

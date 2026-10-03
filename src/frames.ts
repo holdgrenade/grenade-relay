@@ -129,6 +129,51 @@ export type PushErrorCode = z.infer<typeof PushErrorCode>;
 export const PushError = z.object({ error: PushErrorCode });
 export type PushError = z.infer<typeof PushError>;
 
+// ---- board push (mirror of grenade-protocol/src/board.ts, PROTOCOL.md "Board push route") ----
+// Strict here (unknown keys refused): a board push reaches the phone unsealed, so it may carry nothing but opaque
+// keys, statuses and whole-second times.
+
+export const BOARD_SESSIONS_MAX = 12;
+export const BoardStatus = z.enum(["answer", "working", "done", "idle"]);
+export const BoardKey = z.string().regex(/^[0-9a-f]{16}$/, "not a board key");
+export const BoardEntry = z.strictObject({ k: BoardKey, s: BoardStatus, t: z.number().int().nonnegative() });
+export const BoardState = z.strictObject({ v: z.literal(1), sessions: z.array(BoardEntry).max(BOARD_SESSIONS_MAX) });
+export type BoardState = z.infer<typeof BoardState>;
+
+/** A board push on `POST /v1/push`: sent to the Live Activity's own push token, readable by the relay and Apple by design. */
+export const BoardPushRequest = z.strictObject({
+  kind: z.literal("board"),
+  provider: PushProvider,
+  pushToken: z.string().regex(/^[0-9a-f]{32,400}$/, "not a push token"),
+  environment: PushEnvironment,
+  topic: z.string().regex(/^[A-Za-z0-9.-]{1,155}$/, "not a bundle id"),
+  event: z.enum(["update", "end"]),
+  alert: z.boolean(),
+  /** Unix time in seconds. */
+  at: z.number().int().nonnegative(),
+  state: BoardState,
+});
+export type BoardPushRequest = z.infer<typeof BoardPushRequest>;
+
+/** Any body of `POST /v1/push`. */
+export type PushRouteRequest = PushRequest | BoardPushRequest;
+
+export function isBoardPush(r: PushRouteRequest): r is BoardPushRequest {
+  return "kind" in r && r.kind === "board";
+}
+
+/** The address a push goes to: the device token, or the Live Activity's push token. */
+export function pushAddress(r: PushRouteRequest): string {
+  return isBoardPush(r) ? r.pushToken : r.deviceToken;
+}
+
+/** A body with a `kind` is checked as that kind only; one without is a sealed push. */
+export function parsePushRouteRequest(json: unknown): PushRouteRequest | null {
+  const kind = typeof json === "object" && json !== null ? (json as { kind?: unknown }).kind : undefined;
+  const r = kind === undefined ? PushRequest.safeParse(json) : BoardPushRequest.safeParse(json);
+  return r.success ? r.data : null;
+}
+
 // ---- parsing ----------------------------------------------------------------
 
 export type ParseResult<T> = { ok: true; frame: T } | { ok: false; message: string };

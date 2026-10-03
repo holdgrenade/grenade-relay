@@ -3,14 +3,15 @@
  * closes or fails. Never throws: a push that could not be sent comes back with status 0.
  */
 import { connect, constants, type ClientHttp2Session } from "node:http2";
-import type { PushEnvironment, PushRequest } from "../frames.js";
+import { isBoardPush, type PushEnvironment, type PushRouteRequest } from "../frames.js";
 import { ProviderTokens, type ApnsCredentials } from "./apnsToken.js";
+import { boardApnsMessage } from "./boardPayload.js";
 import { apnsMessage, type ApnsMessage } from "./pushPayload.js";
 import { isTokenRefused, type ApnsResult } from "./pushResult.js";
 
 /** What the push route needs from a sender. Tests pass a fake. */
 export interface ApnsSender {
-  send(request: PushRequest): Promise<ApnsResult>;
+  send(request: PushRouteRequest): Promise<ApnsResult>;
   close?(): void;
 }
 
@@ -29,7 +30,8 @@ export function createApnsSender(o: ApnsSenderOptions): ApnsSender {
   const client = new ApnsClient(o.timeoutMs ?? 10_000);
   return {
     async send(request) {
-      const message = apnsMessage(request, tokens.at(now()), now());
+      const token = tokens.at(now());
+      const message = isBoardPush(request) ? boardApnsMessage(request, token) : apnsMessage(request, token, now());
       const result = await client.post(origin(request.environment, message.host), message);
       if (isTokenRefused(result)) tokens.reset();
       return result;

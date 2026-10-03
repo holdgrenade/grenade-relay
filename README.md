@@ -85,7 +85,9 @@ What a relay learns from a push:
 
 It does not learn the session's name, the question, or which Mac the push is for. It keeps nothing: the Mac sends the device token with every push, and the relay never writes a device token to its log (a log line names a phone by the first 8 hex digits of the token's SHA-256).
 
-The route is limited to 60 pushes a minute per sender address and 20 a minute per phone. On a relay with a registration key, a push must bring that key.
+The same route also carries the **Mac board**, the iPhone Live Activity that shows every session on a Mac with its status. Apple hands a Live Activity push to the widget without letting the app open it, so a board push cannot be sealed. Instead it carries nothing a relay could read anything from: per session an opaque key (only the phone and the Mac can tell which session it is), one of four statuses and the time it got it. The relay refuses a board push with any other field. It sends it to the activity's own push token, which it never logs either.
+
+The route is limited to 60 pushes a minute per sender address and 20 a minute per phone, board pushes included. On a relay with a registration key, a push must bring that key.
 
 ### On your own relay
 
@@ -108,7 +110,7 @@ The wire contract is in `grenade-protocol/PROTOCOL.md`, under "Remote access (re
 - A Mac holds one WebSocket to `/v1/daemon`. It registers a random relay id plus a secret; the first Mac to register an id owns it. The relay pings every 15 s and marks the Mac offline after 30 s of silence.
 - A phone opens `/v1/connect/<relay id>` with its access key. The relay tells the Mac `open`, then forwards `data` both ways until either side closes.
 - `GET /v1/presence/<relay id>` (same access key) answers whether the Mac is online and its IPs, even while it is off.
-- `POST /v1/push` sends one sealed push to a phone. It is in `PROTOCOL.md` under "Push notifications".
+- `POST /v1/push` sends one sealed push, or one board push, to a phone. It is in `PROTOCOL.md` under "Push notifications" and "Mac board".
 
 ## License
 

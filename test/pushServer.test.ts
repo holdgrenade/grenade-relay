@@ -6,7 +6,7 @@ import { createServer, type Http2Server, type IncomingHttpHeaders, type ServerHt
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { PushRequest } from "../src/frames.js";
+import type { PushRequest, PushRouteRequest } from "../src/frames.js";
 import { silentLogger } from "../src/log.js";
 import { createApnsSender, type ApnsSender } from "../src/push/apnsClient.js";
 import { PushLimiter } from "../src/push/pushLimiter.js";
@@ -32,7 +32,7 @@ async function relay(push: PushOptions | undefined, registrationKey?: string): P
 }
 
 function fakeSender(result: ApnsResult = { status: 200 }) {
-  const sent: PushRequest[] = [];
+  const sent: PushRouteRequest[] = [];
   const sender: ApnsSender = { send: async (r) => (sent.push(r), result) };
   return { sender, sent };
 }
@@ -193,6 +193,17 @@ describe("APNs client", () => {
     expect(String(first.headers["authorization"])).toMatch(/^bearer [\w-]+\.[\w-]+\.[\w-]+$/);
     expect(apple.seen[1]!.headers["authorization"]).toBe(first.headers["authorization"]);
     expect(JSON.parse(first.body).g).toEqual({ v: 1, e: request.e, c: request.c });
+  });
+
+  it("sends a board push to the activity's token as a liveactivity push", async () => {
+    const apple = await pushService(() => ({ status: 200 }));
+    const examples = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", "board.examples.json"), "utf8"));
+    expect(await sender(apple.origin).send(examples.request)).toEqual({ status: 200 });
+    const seen = apple.seen[0]!;
+    expect(seen.headers[":path"]).toBe(`/3/device/${examples.request.pushToken}`);
+    for (const [name, value] of Object.entries(examples.apns.alert.headers)) expect(seen.headers[name], name).toBe(value);
+    expect(seen.headers["apns-collapse-id"]).toBeUndefined();
+    expect(JSON.parse(seen.body)).toEqual(examples.apns.alert.payload);
   });
 
   it("reports the reason of a refusal", async () => {

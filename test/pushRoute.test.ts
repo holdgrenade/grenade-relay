@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { PushRequest } from "../src/frames.js";
+import type { PushRequest, PushRouteRequest } from "../src/frames.js";
 import type { Fields, Logger } from "../src/log.js";
 import type { ApnsSender } from "../src/push/apnsClient.js";
 import { PushLimiter } from "../src/push/pushLimiter.js";
@@ -22,7 +22,7 @@ function collectingLogger() {
 }
 
 function fakeSender(result: ApnsResult = { status: 200 }) {
-  const sent: PushRequest[] = [];
+  const sent: PushRouteRequest[] = [];
   const sender: ApnsSender = { send: async (r) => (sent.push(r), result) };
   return { sender, sent };
 }
