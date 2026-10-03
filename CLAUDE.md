@@ -47,16 +47,16 @@ docker compose up -d # with .env from .env.example
 
 ## Versions and releases
 
-`version` in `package.json` is the relay's version (`/health` and the startup log show it), from `1.0.0` on 2026-10-01. Every change bumps it in the same commit (patch for fixes, minor for features). On a push to `main`, `.github/workflows/release.yml` type-checks, tests and builds; when the version has no tag yet it tags `v<version>` and makes a GitHub release with generated notes. A push without a bump only runs the checks. A release does not deploy: `git push heroku main` stays a step of its own.
+`version` in `package.json` is the relay's version (`/health` and the startup log show it), from `1.0.0` on 2026-10-01. Every change bumps it in the same commit (patch for fixes, minor for features). On a push to `main`, `.github/workflows/release.yml` type-checks, tests and builds; when the version has no tag yet it tags `v<version>` and makes a GitHub release with generated notes. A push without a bump only runs the checks. A release does not deploy the main relay: that stays a step of its own.
 
-## Main instance (Heroku)
+## Main instance
 
-- Served at `https://relay.holdgrenade.com` (`OFFICIAL_RELAY_URL`; a Cloudflare DNS record pointing at Heroku's DNS target). The old `https://grenade-relay-7a47b5a07a7d.herokuapp.com` still reaches the same app, so Macs that stored it keep working. The public website does not say the relay runs on Heroku; keep it that way.
-- App `grenade-relay` (Croissant Heroku account), one Basic `web` dyno running `Procfile` (`node dist/main.js`); Heroku's Node buildpack runs `npm run build`. Deploy: `git push heroku main`. Logs: `heroku logs -t -a grenade-relay`.
-- Config vars: `GRENADE_RELAY_TRUST_PROXY=1` (one proxy, Heroku's router, which appends the client's address to whatever `X-Forwarded-For` the client sent; so only the last entry is believed), `GRENADE_RELAY_ADMIN_KEY` (read it with `heroku config:get`), no registration key (open relay). Heroku terminates TLS, so Caddy is not used there.
+- Served at `https://relay.holdgrenade.com` (`OFFICIAL_RELAY_URL`). An address it had before still reaches it, so Macs that stored that one keep working.
+- **Where it is hosted and how it is deployed is not in this repo**, which is public: it is in the maintainers' own notes (the workspace `CLAUDE.md`, "Main relay"). Never name the host here, in a comment or in a commit message.
+- It runs as `npm start` behind one proxy that terminates TLS, so Caddy is not used there. Settings: `GRENADE_RELAY_TRUST_PROXY=1`, an admin key, no registration key (open relay).
 - Push: the main relay is the one that holds the APNs key (`GRENADE_RELAY_APNS_KEY`, the `.p8` text with `\n` for newlines; `GRENADE_RELAY_APNS_KEY_ID`; `GRENADE_RELAY_APNS_TEAM_ID`), set since 2026-10-03. They are Adam's: never create, read or set them on Adam's behalf.
-- Keep it at **one dyno**: all state is in one process. The disk is ephemeral, so `daemons.json` is lost on each restart (at least daily). Macs re-register within seconds with their access lists; a Mac that is off drops out of presence until it reconnects.
-- The router closes connections idle for 55 s; the 15 s pings keep links open.
+- Keep it at **one process**: all state is in it. Its disk does not survive a restart, so `daemons.json` is lost each time. Macs re-register within seconds with their access lists; a Mac that is off drops out of presence until it reconnects.
+- Its proxy closes idle connections; the 15 s pings keep links open.
 
 ## Invariants
 
@@ -70,7 +70,7 @@ docker compose up -d # with .env from .env.example
 - `GRENADE_RELAY_REGISTRATION_KEY` unset = open relay (the main one); set = private. `GRENADE_RELAY_ADMIN_KEY` unset = no dashboard, no list (404).
 - Max WebSocket message 4 MB (screen frames with colors). A socket with more than 16 MB waiting to be read is terminated (`socketPipe.ts`): the relay never buffers without bound for a peer that stopped reading.
 - **Nothing a stranger sends may end the process.** Node gives an upgrade's socket to the `upgrade` handler with no error listener, and an exception there is uncaught: the handler is wrapped, a request target that is not a path (`//`) is answered 400 (`pathOf`), and `refuseUpgrade` listens for the socket's error before it writes. Both ended the relay with one request until 1.1.1; `server.test.ts` sends them. The same goes for timers: `DaemonStore.flush` runs in one and catches a failed save (full disk, folder not writable), which used to end the process and again on every restart.
-- **A client's address is what our proxy saw, never what the client says.** `GRENADE_RELAY_TRUST_PROXY` is the number of proxies in front; the address is read that many `X-Forwarded-For` entries from the right. The first entry is the client's own claim behind any proxy that appends (Heroku's router does), and believing it let anyone pick a new sender address per push and so skip the per-sender limit (until 1.1.1).
+- **A client's address is what our proxy saw, never what the client says.** `GRENADE_RELAY_TRUST_PROXY` is the number of proxies in front; the address is read that many `X-Forwarded-For` entries from the right. The first entry is the client's own claim behind any proxy that appends to the header instead of replacing it, and believing it let anyone pick a new sender address per push and so skip the per-sender limit (until 1.1.1).
 - A log sentence may quote a Mac's name, so `formatLine` turns control characters in it into spaces, and writes a value that holds one JSON-quoted: nothing a client sends can forge a log line.
 - **The push route is blind and keeps nothing.** `c` is sealed to the phone; never try to open it, and never add a push feature that needs the session, the Mac or the text in the clear. No device token is stored: the daemon sends it with every push, so a restart loses nothing.
 - **A device token is never logged**, nor `e` or `c`. A log line names a phone by the first 8 hex of `sha256(deviceToken)`. `pushRoute.test.ts` checks every answer's log lines for it.
