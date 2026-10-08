@@ -36,7 +36,7 @@ docker compose up -d # with .env from .env.example
 | `src/push/apnsToken.ts` | Pure: the APNs provider token (ES256 JWT from the `.p8` key), `ProviderTokens` reuses one for 50 minutes |
 | `src/push/apnsClient.ts` | `createApnsSender`: HTTP/2 to APNs, one session per host, re-made when it closes; 10 s timeout; never throws (status 0) |
 | `src/push/upstream.ts` | `createUpstream`: passes a push, unchanged, to another relay's push route with `X-Grenade-Push-Hops` |
-| `src/auth.ts` | Pure: SHA-256 hex, timing-safe compare, Bearer/Basic parsing, `keyMatches` |
+| `src/auth.ts` | Pure: SHA-256 hex, timing-safe compare, Bearer/Basic parsing, `subprotocolAccess` (a browser's access key in `grenade-access.<access>`, used on `/v1/connect` only when there is no `Authorization`), `keyMatches` |
 | `src/presence.ts` | Pure: record + online-since → `Presence`; sort order |
 | `src/dashboard.ts` | Pure: the admin HTML page (escaped, self-contained, light/dark, refresh 15 s) |
 | `src/clientIp.ts` | Pure: socket address, or the `X-Forwarded-For` entry your proxies wrote (`trustedProxies` from the right); never an entry the client sent, never a string that is not an IP |

@@ -7,10 +7,10 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
-import { basicPassword, bearerToken, keyMatches } from "./auth.js";
+import { basicPassword, bearerToken, keyMatches, subprotocolAccess } from "./auth.js";
 import { clientIp } from "./clientIp.js";
 import { renderDashboard } from "./dashboard.js";
-import { RELAY_CONNECT_PATH, RELAY_DAEMONS_PATH, RELAY_DAEMON_PATH, RELAY_PRESENCE_PATH, RELAY_PUSH_PATH, RelayId } from "./frames.js";
+import { RELAY_ACCESS_SUBPROTOCOL_PREFIX, RELAY_CONNECT_PATH, RELAY_DAEMONS_PATH, RELAY_DAEMON_PATH, RELAY_PRESENCE_PATH, RELAY_PUSH_PATH, RelayId } from "./frames.js";
 import { Hub, type Admission } from "./hub.js";
 import type { Logger } from "./log.js";
 import type { ApnsSender } from "./push/apnsClient.js";
@@ -127,7 +127,9 @@ export async function startRelay(o: RelayOptions): Promise<RunningRelay> {
     json(res, 404, { error: "not_found" });
   }
 
-  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
+  // Answer a browser's access subprotocol with itself, as the handshake requires; offer nothing back otherwise.
+  const handleProtocols = (offered: Set<string>) => [...offered].find((p) => p.startsWith(RELAY_ACCESS_SUBPROTOCOL_PREFIX)) ?? false;
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES, handleProtocols });
   const lastPong = new WeakMap<WebSocket, number>();
 
   // Node hands an upgrade's socket over with no error listener, and an exception here would be uncaught:
@@ -150,7 +152,10 @@ export async function startRelay(o: RelayOptions): Promise<RunningRelay> {
     }
     if (path.startsWith(RELAY_CONNECT_PATH)) {
       const id = path.slice(RELAY_CONNECT_PATH.length);
-      const admission: Admission = RelayId.safeParse(id).success ? hub.admitPhone(id, bearerToken(req.headers.authorization)) : "unknown";
+      // A browser cannot send Authorization on a WebSocket, so without one the access key may come as a subprotocol.
+      const viaSubprotocol = req.headers.authorization ? null : subprotocolAccess(req.headers["sec-websocket-protocol"], RELAY_ACCESS_SUBPROTOCOL_PREFIX);
+      const access = viaSubprotocol ?? bearerToken(req.headers.authorization);
+      const admission: Admission = RelayId.safeParse(id).success ? hub.admitPhone(id, access) : "unknown";
       if (admission !== "ok") return refuseUpgrade(socket, ...REFUSALS[admission]);
       return wss.handleUpgrade(req, socket, head, (ws) => acceptPhone(ws, id, ip));
     }

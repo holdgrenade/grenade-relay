@@ -18,6 +18,16 @@ export function bearerToken(header: string | undefined): string | null {
   return m?.[1] ?? null;
 }
 
+/**
+ * The access key a browser offers as the subprotocol `grenade-access.<access>` (`Sec-WebSocket-Protocol`), else null.
+ * The first offered entry with the prefix wins.
+ */
+export function subprotocolAccess(header: string | undefined, prefix: string): string | null {
+  const entry = (header ?? "").split(",").map((p) => p.trim()).find((p) => p.startsWith(prefix));
+  const access = entry?.slice(prefix.length);
+  return access ? access : null;
+}
+
 /** `Authorization: Basic base64(user:password)` → password, else null. The user name is ignored. */
 export function basicPassword(header: string | undefined): string | null {
   const m = /^Basic\s+(\S+)\s*$/i.exec(header ?? "");

@@ -124,6 +124,19 @@ describe("relay server", () => {
     expect(await d.nextFrame(3)).toEqual({ type: "close", conn: opened.conn });
   });
 
+  it("admits a browser that sends its access key as a subprotocol, and answers with it", async () => {
+    const host = await start();
+    const d = await daemonOnline(host);
+    await d.nextFrame(0);
+    const ws = new WebSocket(`ws://${host}/v1/connect/${ID}`, [`grenade-access.${ACCESS}`]);
+    sockets.push(ws);
+    await new Promise<void>((res, rej) => { ws.once("open", () => res()); ws.once("error", rej); });
+    expect(ws.protocol).toBe(`grenade-access.${ACCESS}`);
+    expect(await d.nextFrame(1)).toMatchObject({ type: "open" });
+    expect(await upgradeStatus(`ws://${host}/v1/connect/${ID}`, { "Sec-WebSocket-Protocol": "grenade-access.wrong" })).toBe(401);
+    expect(await upgradeStatus(`ws://${host}/v1/connect/${ID}`, { "Sec-WebSocket-Protocol": "grenade-access." })).toBe(401);
+  });
+
   it("closes the phone with the daemon's code", async () => {
     const host = await start();
     const d = await daemonOnline(host);

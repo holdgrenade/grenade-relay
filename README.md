@@ -120,7 +120,7 @@ Found a security problem? [Report it privately](https://github.com/holdgrenade/g
 The relay's HTTP and WebSocket API is documented on [holdgrenade.com/relay](https://www.holdgrenade.com/relay). The full wire contract is `PROTOCOL.md` in `grenade-protocol`, which is not public; `src/frames.ts` mirrors the relay's part of it. In short:
 
 - A Mac holds one WebSocket to `/v1/daemon`. It registers a random relay id plus a secret; the first Mac to register an id owns it. The relay pings every 15 s and marks the Mac offline after 30 s of silence.
-- A phone opens `/v1/connect/<relay id>` with its access key. The relay tells the Mac `open`, then forwards `data` both ways until either side closes.
+- A phone opens `/v1/connect/<relay id>` with its access key (`Authorization: Bearer`, or from a browser, which cannot set that header, the WebSocket subprotocol `grenade-access.<access>`, which the relay answers with). The relay tells the Mac `open`, then forwards `data` both ways until either side closes.
 - `GET /v1/presence/<relay id>` (same access key) answers whether the Mac is online and its IPs, even while it is off.
 - `POST /v1/push` sends one sealed push, or one board push, to a phone.
 

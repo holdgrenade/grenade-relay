@@ -7,6 +7,8 @@ import { z } from "zod";
 export const RELAY_PROTOCOL_VERSION = 1 as const;
 export const RELAY_DAEMON_PATH = "/v1/daemon";
 export const RELAY_CONNECT_PATH = "/v1/connect/";
+/** A browser cannot set `Authorization` on a WebSocket: it offers `grenade-access.<access>` as a subprotocol. */
+export const RELAY_ACCESS_SUBPROTOCOL_PREFIX = "grenade-access.";
 export const RELAY_PRESENCE_PATH = "/v1/presence/";
 export const RELAY_DAEMONS_PATH = "/v1/daemons";
 export const RELAY_PUSH_PATH = "/v1/push";
