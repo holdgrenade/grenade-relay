@@ -25,32 +25,55 @@ jobs:
     outputs:
       sha: ${{ steps.bump.outputs.sha }}
     steps:
-      - name: Check out main as it is now
+      - name: Check out main as it is now, with its tags
         uses: actions/checkout@v4
         with:
           ref: main
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: The next patch, unless this version is new
+      # The version to release always has its CHANGELOG.md section: a section written by hand is kept; else one line
+      # per commit subject since the previous tag (no merges, none of this job's own commits).
+      - name: The next patch and its CHANGELOG section, unless this version is new
         id: bump
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           version() { node -p "require('./package.json').version"; }
           tagged() { git ls-remote --exit-code --tags origin "refs/tags/v$1" >/dev/null; }
+          has_section() { grep -q "^## $1 " CHANGELOG.md; }
+          lines="$RUNNER_TEMP/lines"
           # Three tries: a push that lands while this runs moves main, and the bump goes on top of it.
           for attempt in 1 2 3; do
-            if ! tagged "$(version)"; then break; fi
-            npm version patch --no-git-tag-version >/dev/null
-            git commit --quiet --all -m "$(version)"
+            message=""
+            prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD 2>/dev/null || true)
+            if tagged "$(version)"; then
+              npm version patch --no-git-tag-version >/dev/null
+              message="$(version)"
+            fi
+            if ! has_section "$(version)"; then
+              git log ${prev:+"$prev..HEAD"} --no-merges --format='%an%x09%s' | awk -F'\t' '$1 != "github-actions[bot]" { print "- " $2 }' > "$lines"
+              [ -s "$lines" ] || echo "- No change of its own." > "$lines"
+              VERSION=$(version) LINES="$lines" node -e '
+                const fs = require("fs");
+                const day = new Date().toISOString().slice(0, 10);
+                const text = fs.readFileSync("CHANGELOG.md", "utf8");
+                const section = `## ${process.env.VERSION} (${day})\n\n${fs.readFileSync(process.env.LINES, "utf8").trim()}\n\n`;
+                const at = text.indexOf("\n## ");
+                fs.writeFileSync("CHANGELOG.md", at < 0 ? text.trimEnd() + "\n\n" + section : text.slice(0, at + 1) + section + text.slice(at + 1));'
+              message="${message:-$(version): CHANGELOG}"
+            fi
+            [ -n "$message" ] || break
+            git commit --quiet --all -m "$message"
             if git push --quiet origin HEAD:main; then break; fi
-            git fetch --quiet origin main && git reset --quiet --hard origin/main
+            git fetch --quiet --tags origin main && git reset --quiet --hard origin/main
             if [ "$attempt" = 3 ]; then echo "main kept moving; push again to release" && exit 1; fi
           done
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "version=$(version)" >> "$GITHUB_OUTPUT"
           echo "Releasing $(version) from $(git rev-parse --short HEAD)"
 
   release:
@@ -88,5 +111,6 @@ jobs:
           git tag "v$VERSION"
           git push origin "v$VERSION"
           if ! gh release view "v$VERSION" >/dev/null 2>&1; then
-            gh release create "v$VERSION" --title "Grenade Relay $VERSION" --generate-notes
+            awk -v v="$VERSION" '$0 ~ "^## "v" " {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
+            gh release create "v$VERSION" --title "Grenade Relay $VERSION" --notes-file notes.md
           fi
