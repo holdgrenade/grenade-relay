@@ -15,6 +15,7 @@ import {
   type RelayServerFrame,
 } from "./frames.js";
 import type { Logger } from "./log.js";
+import { RegistrationLimiter } from "./registrationLimiter.js";
 import { byPresence, presenceOf } from "./presence.js";
 import type { DaemonRecord, DaemonStore } from "./store.js";
 
@@ -25,6 +26,15 @@ export interface Pipe {
 }
 
 export const MAX_PIPES_PER_DAEMON = 8;
+/** How many Macs a relay keeps records of unless told otherwise (`GRENADE_RELAY_MAX_MACS`). */
+export const DEFAULT_MAX_DAEMONS = 5000;
+/** How many links one address may hold open before they register (each has 5 s to). */
+export const MAX_PENDING_LINKS_PER_ADDRESS = 10;
+/**
+ * Close code for a Mac the relay turns away for now: too many new ids from its address, or no room for another Mac.
+ * WebSocket's own "try again later": a daemon takes it as a dropped link and reconnects with backoff.
+ */
+export const CLOSE_TRY_LATER = 1013;
 /** Close code for a daemon link that another link with the same id replaced. */
 export const CLOSE_REPLACED = 4000;
 
@@ -49,22 +59,38 @@ export interface HubDeps {
   store: DaemonStore;
   log: Logger;
   registrationKey?: string | undefined;
+  /** How many Macs the relay keeps records of; a new id past it is turned away. Default `DEFAULT_MAX_DAEMONS`. */
+  maxDaemons?: number | undefined;
+  registrationLimiter?: RegistrationLimiter;
   now?: () => number;
 }
 
 export class Hub {
   private readonly live = new Map<string, DaemonLink>();
+  /** Links that have not registered yet. */
+  private readonly pending = new Set<DaemonLink>();
   private readonly now: () => number;
+  private readonly registrations: RegistrationLimiter;
 
   constructor(private readonly d: HubDeps) {
     this.now = d.now ?? Date.now;
+    this.registrations = d.registrationLimiter ?? new RegistrationLimiter();
   }
 
   // ---- daemon links -----------------------------------------------------------
 
   /** A daemon's WebSocket opened. `authorization` is the bearer token it presented, if any. */
   attachDaemon(socket: Pipe, ip: string | undefined, authorization: string | null): DaemonLink {
-    return new DaemonLink(socket, ip, authorization);
+    const link = new DaemonLink(socket, ip, authorization);
+    this.pending.add(link);
+    return link;
+  }
+
+  /** How many links from `ip` have not registered yet. Checked before a Mac's upgrade. */
+  pendingFrom(ip: string): number {
+    let n = 0;
+    for (const link of this.pending) if (link.ip === ip) n++;
+    return n;
   }
 
   isRegistered(link: DaemonLink): boolean {
@@ -104,6 +130,7 @@ export class Hub {
 
   /** The daemon's socket closed (or was terminated for missing pongs). */
   handleDaemonClose(link: DaemonLink): void {
+    this.pending.delete(link);
     if (link.closed) return;
     link.closed = true;
     this.closePipes(link, "mac went offline");
@@ -121,6 +148,11 @@ export class Hub {
     const secretHash = sha256hex(frame.secret);
     const existing = this.d.store.get(frame.id);
     if (existing && !safeEqual(existing.secretHash, secretHash)) return this.refuse(link, "id_taken", "this relay id belongs to another Mac");
+    if (!existing) {
+      if (this.d.store.size >= (this.d.maxDaemons ?? DEFAULT_MAX_DAEMONS)) return this.turnAway(link, "this relay holds as many Macs as it can");
+      if (link.ip && !this.registrations.take(link.ip, now)) return this.turnAway(link, "too many new Macs from this address");
+    }
+    this.pending.delete(link);
 
     const previous = this.live.get(frame.id);
     if (previous && previous !== link) {
@@ -164,6 +196,13 @@ export class Hub {
     this.sendTo(link, { type: "error", code, message });
     this.d.log.warn(`Refused a Mac link: ${message}`, { code, id: link.id ?? undefined, ip: link.ip });
     link.socket.close(4400, safeCloseReason(message));
+    this.handleDaemonClose(link);
+  }
+
+  /** Closes a Mac's link with "try again later", which the daemon retries with backoff. Not a refusal of the Mac. */
+  private turnAway(link: DaemonLink, reason: string): void {
+    this.d.log.warn(`Turned a Mac away for now: ${reason}`, { ip: link.ip });
+    link.socket.close(CLOSE_TRY_LATER, reason);
     this.handleDaemonClose(link);
   }
 

@@ -116,6 +116,9 @@ describe("config", () => {
     expect(readConfig({ GRENADE_RELAY_TRUST_PROXY: "0" }, "/").trustedProxies).toBe(0);
     expect(() => readConfig({ GRENADE_RELAY_TRUST_PROXY: "yes" }, "/")).toThrow(/number of proxies/);
     expect(() => readConfig({ PORT: "nope" }, "/")).toThrow();
+    expect(c.maxDaemons).toBe(5000);
+    expect(readConfig({ GRENADE_RELAY_MAX_MACS: "200" }, "/").maxDaemons).toBe(200);
+    expect(() => readConfig({ GRENADE_RELAY_MAX_MACS: "0" }, "/")).toThrow(/GRENADE_RELAY_MAX_MACS/);
   });
 });
 
@@ -158,5 +161,31 @@ describe("dashboard", () => {
     expect(ago(10_000)).toBe("just now");
     expect(ago(3 * 86_400_000)).toBe("3 d ago");
     expect(escapeHtml(`"'&`)).toBe("&quot;&#39;&amp;");
+  });
+});
+
+describe("RegistrationLimiter", () => {
+  it("lets an address register so many new ids an hour, then none until its window ends", async () => {
+    const { RegistrationLimiter } = await import("../src/registrationLimiter.js");
+    const l = new RegistrationLimiter({ perAddress: 2, windowMs: 1000 });
+    expect(l.take("203.0.113.7", 0)).toBe(true);
+    expect(l.take("203.0.113.7", 10)).toBe(true);
+    expect(l.take("203.0.113.7", 20)).toBe(false);
+    expect(l.take("198.51.100.1", 20)).toBe(true);
+    expect(l.take("203.0.113.7", 1000)).toBe(true);
+    l.sweep(5000);
+    expect(l.size).toBe(0);
+  });
+});
+
+describe("PushLimiter overall", () => {
+  it("caps every push the relay sends in a minute, whoever sends it and to whichever phone", async () => {
+    const { PushLimiter } = await import("../src/push/pushLimiter.js");
+    const l = new PushLimiter({ overall: 3 });
+    expect(l.take("203.0.113.1", "a", 0)).toBe(0);
+    expect(l.take("203.0.113.2", "b", 0)).toBe(0);
+    expect(l.take("203.0.113.3", "c", 0)).toBe(0);
+    expect(l.take("203.0.113.4", "d", 1000)).toBe(59);
+    expect(l.take("203.0.113.4", "d", 60_000)).toBe(0);
   });
 });

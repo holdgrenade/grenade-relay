@@ -146,9 +146,9 @@ describe("PushLimiter", () => {
   it("forgets windows that have ended", () => {
     const l = new PushLimiter({ sweepAbove: 10 });
     for (let i = 0; i < 10; i++) l.take(undefined, `phone${i}`, NOW);
-    expect(l.size).toBe(10);
+    expect(l.size).toBe(11); // ten phones and the overall window
     l.take(undefined, "late", NOW + 61_000);
-    expect(l.size).toBe(1);
+    expect(l.size).toBe(2);
   });
 });
 

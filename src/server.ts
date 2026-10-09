@@ -11,7 +11,7 @@ import { basicPassword, bearerToken, keyMatches, subprotocolAccess } from "./aut
 import { clientIp } from "./clientIp.js";
 import { renderDashboard } from "./dashboard.js";
 import { RELAY_ACCESS_SUBPROTOCOL_PREFIX, RELAY_CONNECT_PATH, RELAY_DAEMONS_PATH, RELAY_DAEMON_PATH, RELAY_PRESENCE_PATH, RELAY_PUSH_PATH, RelayId } from "./frames.js";
-import { Hub, type Admission } from "./hub.js";
+import { Hub, MAX_PENDING_LINKS_PER_ADDRESS, type Admission } from "./hub.js";
 import type { Logger } from "./log.js";
 import type { ApnsSender } from "./push/apnsClient.js";
 import { PushLimiter } from "./push/pushLimiter.js";
@@ -40,6 +40,8 @@ export interface RelayOptions {
   /** Where daemons.json lives; null keeps records in memory. */
   dataFile: string | null;
   registrationKey?: string | undefined;
+  /** How many Macs the relay keeps records of (`GRENADE_RELAY_MAX_MACS`). */
+  maxDaemons?: number | undefined;
   adminKey?: string | undefined;
   /** How many proxies you run in front of the relay; the client IP is read that many X-Forwarded-For entries from the right. */
   trustedProxies?: number;
@@ -69,7 +71,7 @@ const REFUSALS: Record<Exclude<Admission, "ok">, [number, string]> = {
 export async function startRelay(o: RelayOptions): Promise<RunningRelay> {
   const now = o.now ?? Date.now;
   const store = new DaemonStore(o.dataFile, (e) => o.log.error("Could not save the Macs' records; going on from memory", { file: o.dataFile, error: e }));
-  const hub = new Hub({ store, log: o.log, registrationKey: o.registrationKey, now });
+  const hub = new Hub({ store, log: o.log, registrationKey: o.registrationKey, maxDaemons: o.maxDaemons, now });
   const ipOf = (req: IncomingMessage) =>
     clientIp({ remoteAddress: req.socket.remoteAddress, forwardedFor: req.headers["x-forwarded-for"], trustedProxies: o.trustedProxies ?? 0 });
 
@@ -148,6 +150,7 @@ export async function startRelay(o: RelayOptions): Promise<RunningRelay> {
     if (path === null) return refuseUpgrade(socket, 400, "Bad Request");
     const ip = ipOf(req);
     if (path === RELAY_DAEMON_PATH) {
+      if (ip && hub.pendingFrom(ip) >= MAX_PENDING_LINKS_PER_ADDRESS) return refuseUpgrade(socket, 429, "Too Many Requests");
       return wss.handleUpgrade(req, socket, head, (ws) => acceptDaemon(ws, ip, bearerToken(req.headers.authorization)));
     }
     if (path.startsWith(RELAY_CONNECT_PATH)) {

@@ -28,6 +28,7 @@ try {
     host: config.host,
     dataFile: join(config.dataDir, "daemons.json"),
     registrationKey: config.registrationKey,
+    maxDaemons: config.maxDaemons,
     adminKey: config.adminKey,
     trustedProxies: config.trustedProxies,
     push: pushOptions(config.push),

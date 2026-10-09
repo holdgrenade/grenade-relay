@@ -32,7 +32,8 @@ docker compose up -d # with .env from .env.example
 | `src/push/pushPayload.ts` | Pure: a push request → the APNs body (fallback alert + sealed content) and headers |
 | `src/push/boardPayload.ts` | Pure: a board push → the Live Activity APNs payload and headers (`liveactivity`, times from `at`), as in `board.examples.json` |
 | `src/push/pushResult.ts` | Pure: what APNs answered → what the route answers (`replyForApns`, `refusal`) |
-| `src/push/pushLimiter.ts` | `PushLimiter`: 60 a minute per sender address, 20 per phone; fixed windows, `now` passed in, ended windows swept |
+| `src/push/pushLimiter.ts` | `PushLimiter`: 60 a minute per sender address, 20 per phone, 1200 in all; fixed windows, `now` passed in, ended windows swept |
+| `src/registrationLimiter.ts` | `RegistrationLimiter`: 30 new relay ids an hour per address; a Mac the relay knows is never counted |
 | `src/push/apnsToken.ts` | Pure: the APNs provider token (ES256 JWT from the `.p8` key), `ProviderTokens` reuses one for 50 minutes |
 | `src/push/apnsClient.ts` | `createApnsSender`: HTTP/2 to APNs, one session per host, re-made when it closes; 10 s timeout; never throws (status 0) |
 | `src/push/upstream.ts` | `createUpstream`: passes a push, unchanged, to another relay's push route with `X-Grenade-Push-Hops` |
@@ -67,6 +68,7 @@ docker compose up -d # with .env from .env.example
 - Every daemon frame goes through `parseRelayDaemonFrame`; a bad one gets `error` then the link closes. The first frame must be `register` within 5 s.
 - The first link to register an id owns it (by secret). A later link with the right secret replaces the old one (old closed with 4000, its phones with 4503).
 - Unpairing is the daemon's `update {access}` with a shorter list: the relay admits exactly the phones in the latest list, and the daemon closes that phone's open pipes itself (`close`). Nothing in the relay knows what a pairing is.
+- **New Macs are limited, known ones never.** A register for an id the relay has no record of is turned away past 30 an hour from its address (`RegistrationLimiter`) or past `GRENADE_RELAY_MAX_MACS` records (5000), and a Mac's upgrade is refused with 429 while its address has 10 links that have not registered. Turned away is closed with 1013 (WebSocket's "try again later") and no `error` frame, so the daemon reconnects with backoff and needs no new error code. After a restart every Mac is new again, so 30 an hour is per address, not per Mac: a team of more Macs behind one address fills in over the next hours.
 - Phones are checked before the upgrade: 404 unknown id, 401 access not in the daemon's list, 503 daemon offline, 429 over 8 pipes. The access list is persisted, so presence answers while the Mac is off.
 - Every socket is pinged every 15 s and terminated after 30 s without a pong. A dropped daemon link closes its phone pipes with 4503 and sets `lastSeen`.
 - `GRENADE_RELAY_REGISTRATION_KEY` unset = open relay (the main one); set = private. `GRENADE_RELAY_ADMIN_KEY` unset = no dashboard, no list (404).
@@ -92,8 +94,8 @@ docker compose up -d # with .env from .env.example
 
 ## Known gaps
 
-- No rate limiting beyond 8 pipes per daemon, the 4 MB message cap, the 16 MB buffer cap and the push route's limits. Put the public relay behind a proxy with connection limits if abuse shows up.
-- On an open relay anyone may register new relay ids without limit, each a record of up to 1000 access hashes kept for 90 days, and the whole store is rewritten on every change: a flood of registrations fills memory and disk. A limit per address needs a way to tell a daemon "too many" (a close code or error code in the protocol), which does not exist yet.
+- Beyond the limits above (pipes per daemon, message and buffer caps, push limits, new Macs per address and in all, links waiting to register) there is no connection limit per address. Put the public relay behind a proxy with connection limits if abuse shows up.
+- Each record may hold up to 1000 access hashes and the whole store is rewritten on every change, so `GRENADE_RELAY_MAX_MACS` bounds memory and disk only roughly (5000 full records is about 330 MB). Real Macs list a few phones each.
 - The first link to register an id owns it, and the main relay loses its records at every restart (ephemeral disk). Someone who knows a Mac's relay id (128 random bits, known to its paired phones) could register it first after a restart and keep that Mac off the relay (`id_taken`). They could read nothing: phones pin the Mac's key.
 - The admin key has no limit on wrong guesses; it relies on being long and random.
 - The push limits count per IP address, so an IPv6 sender with a whole /64 has many. The main relay is reached over IPv4 only.

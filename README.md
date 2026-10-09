@@ -52,6 +52,7 @@ If that proxy adds the client's address to `X-Forwarded-For`, set `GRENADE_RELAY
 | `HOST` | `0.0.0.0` | Address to bind. |
 | `GRENADE_RELAY_DATA` | `./data` | Folder for `daemons.json` (records of Macs; mode 0600). |
 | `GRENADE_RELAY_REGISTRATION_KEY` | unset | When set, only Macs that present this key may register. Use it for private and company relays. Unset means anyone's Mac may use the relay. |
+| `GRENADE_RELAY_MAX_MACS` | `5000` | How many Macs the relay keeps records of. A new Mac past it is told to try again later; Macs it knows always come back. |
 | `GRENADE_RELAY_ADMIN_KEY` | unset | Turns on the dashboard at `/` (HTTP Basic, any user name, this password) and `GET /v1/daemons`. Unset means both answer 404. |
 | `GRENADE_RELAY_TRUST_PROXY` | unset | The number of proxies you run in front of the relay, usually `1` (the compose file sets it). The client IP is then read that many entries from the right of `X-Forwarded-For`, which is what your proxies wrote; anything a client put there is ignored. Unset or `0` uses the connection's own address. |
 | `GRENADE_RELAY_PUSH_UPSTREAM` | the main relay | The relay that pushes are passed on to. `off` turns push off on this relay. Ignored when an APNs key is set. |
@@ -90,7 +91,7 @@ It does not learn the session's name, the question, or which Mac the push is for
 
 The same route also carries the **Mac board**, the iPhone Live Activity that shows every session on a Mac with its status. Apple hands a Live Activity push to the widget without letting the app open it, so a board push cannot be sealed. Instead it carries nothing a relay could read anything from: per session an opaque key (only the phone and the Mac can tell which session it is), one of four statuses and the time it got it. The relay refuses a board push with any other field. It sends it to the activity's own push token, which it never logs either.
 
-The route is limited to 60 pushes a minute per sender address and 20 a minute per phone, board pushes included. On a relay with a registration key, a push must bring that key.
+The route is limited to 60 pushes a minute per sender address, 20 a minute per phone and 1200 a minute in all, board pushes included. On a relay with a registration key, a push must bring that key.
 
 ### On your own relay
 
@@ -110,7 +111,7 @@ With `GRENADE_RELAY_ADMIN_KEY` set, open `https://<RELAY_HOST>/` and sign in wit
 
 - **A relay for yourself or a team:** set `GRENADE_RELAY_REGISTRATION_KEY`. Without it the relay is open: anyone's Mac may register on it and send pushes through it.
 - **The admin key** guards the list of every Mac with its IP addresses. Make it long and random (`openssl rand -hex 24`), and keep the relay behind TLS so it never travels in the clear.
-- **Limits:** the relay caps phones per Mac (8), the size of a message (4 MB), what may wait for a peer that stopped reading (16 MB) and pushes per sender and per phone. It does not limit how many connections or new Macs one address may open. For an open relay on the public internet, add connection limits at the proxy in front of it.
+- **Limits:** the relay caps phones per Mac (8), the size of a message (4 MB), what may wait for a peer that stopped reading (16 MB), pushes per sender (60 a minute), per phone (20) and in all (1200), new Macs per address (30 an hour), Macs in all (`GRENADE_RELAY_MAX_MACS`) and links per address still waiting to register (10). A Mac over a limit is closed with WebSocket's "try again later" (1013) and reconnects by itself. For an open relay on the public internet, add connection limits at the proxy in front of it too.
 - **Keys stay out of the repo.** `.env`, `*.p8`, `*.pem` and `*.key` are ignored by git; an APNs key is read once at start and never logged.
 
 Found a security problem? [Report it privately](https://github.com/holdgrenade/grenade-relay/security/advisories/new). What a relay's operator can and cannot do to the people using it is on [holdgrenade.com/security](https://www.holdgrenade.com/security).

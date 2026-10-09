@@ -20,6 +20,8 @@ export interface RelayConfig {
   dataDir: string;
   /** When set, daemons must present it to register. Private and enterprise relays set it; the public relay does not. */
   registrationKey: string | undefined;
+  /** How many Macs the relay keeps records of; a new one past it is told to try again later. */
+  maxDaemons: number;
   /** When set, enables GET /v1/daemons and the dashboard. */
   adminKey: string | undefined;
   /** How many proxies you run in front of the relay (0: none). The client IP is read that many X-Forwarded-For entries from the right. */
@@ -36,10 +38,20 @@ export function readConfig(env: Record<string, string | undefined>, cwd: string)
     host: env["HOST"] || "0.0.0.0",
     dataDir: dataDir.startsWith("/") ? dataDir : join(cwd, dataDir),
     registrationKey: env["GRENADE_RELAY_REGISTRATION_KEY"] || undefined,
+    maxDaemons: readMaxDaemons(env["GRENADE_RELAY_MAX_MACS"]),
     adminKey: env["GRENADE_RELAY_ADMIN_KEY"] || undefined,
     trustedProxies: readTrustedProxies(env["GRENADE_RELAY_TRUST_PROXY"]),
     push: readPushConfig(env),
   };
+}
+
+/** Unset: 5000. Otherwise a whole number of at least 1. */
+function readMaxDaemons(value: string | undefined): number {
+  const v = (value ?? "").trim();
+  if (v === "") return 5000;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1) throw new Error(`GRENADE_RELAY_MAX_MACS must be how many Macs the relay may keep (1 or more), got "${value}"`);
+  return n;
 }
 
 /** Unset, `0` or `false`: none. `1` or `true`: one proxy. A larger number: that many, one behind the other. */

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { sha256hex } from "../src/auth.js";
-import { CLOSE_REPLACED, Hub, MAX_PIPES_PER_DAEMON, type Pipe } from "../src/hub.js";
+import { CLOSE_REPLACED, CLOSE_TRY_LATER, Hub, MAX_PIPES_PER_DAEMON, type Pipe } from "../src/hub.js";
+import { RegistrationLimiter } from "../src/registrationLimiter.js";
 import { silentLogger } from "../src/log.js";
 import { DaemonStore } from "../src/store.js";
 
@@ -155,5 +156,46 @@ describe("Hub phone pipes", () => {
     const p = hub.presence(ID, ACCESS);
     expect(p.body).toMatchObject({ online: false, lastSeen: "2026-09-27T12:01:00.000Z", publicIp: "203.0.113.7" });
     expect("since" in p.body).toBe(false);
+  });
+});
+
+describe("Hub limits on new Macs", () => {
+  const idOf = (n: number) => `r_${n.toString(16).padStart(32, "0")}`;
+  const attempt = (hub: Hub, ip: string, id: string) => {
+    const sock = new FakeSocket();
+    const link = hub.attachDaemon(sock, ip, null);
+    hub.handleDaemonMessage(link, register({ id }));
+    return sock;
+  };
+
+  it("turns away an address's new ids past its share with try-again-later, never a Mac it knows", () => {
+    const hub = new Hub({ store: new DaemonStore(null), log: silentLogger, registrationLimiter: new RegistrationLimiter({ perAddress: 2 }), now: () => 0 });
+    expect(attempt(hub, "203.0.113.7", idOf(1)).frames()[0]).toMatchObject({ type: "registered" });
+    expect(attempt(hub, "203.0.113.7", idOf(2)).frames()[0]).toMatchObject({ type: "registered" });
+    const third = attempt(hub, "203.0.113.7", idOf(3));
+    expect(third.sent).toEqual([]);
+    expect(third.closed?.code).toBe(CLOSE_TRY_LATER);
+    expect(attempt(hub, "198.51.100.1", idOf(3)).frames()[0]).toMatchObject({ type: "registered" });
+    // A Mac the relay knows comes back however many new ids its address has had.
+    expect(attempt(hub, "203.0.113.7", idOf(1)).frames()[0]).toMatchObject({ type: "registered" });
+  });
+
+  it("keeps no more Macs than it may, and the ones it keeps still come back", () => {
+    const hub = new Hub({ store: new DaemonStore(null), log: silentLogger, maxDaemons: 2, now: () => 0 });
+    attempt(hub, "203.0.113.1", idOf(1));
+    attempt(hub, "203.0.113.2", idOf(2));
+    expect(attempt(hub, "203.0.113.3", idOf(3)).closed?.code).toBe(CLOSE_TRY_LATER);
+    expect(attempt(hub, "203.0.113.1", idOf(1)).frames()[0]).toMatchObject({ type: "registered" });
+  });
+
+  it("counts an address's links until they register or close", () => {
+    const { hub } = setup();
+    const a = hub.attachDaemon(new FakeSocket(), "203.0.113.7", null);
+    const b = hub.attachDaemon(new FakeSocket(), "203.0.113.7", null);
+    hub.attachDaemon(new FakeSocket(), "198.51.100.1", null);
+    expect(hub.pendingFrom("203.0.113.7")).toBe(2);
+    hub.handleDaemonMessage(a, register());
+    hub.handleDaemonClose(b);
+    expect(hub.pendingFrom("203.0.113.7")).toBe(0);
   });
 });

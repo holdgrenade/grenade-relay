@@ -38,6 +38,11 @@ export class DaemonStore {
     return this.records.get(id);
   }
 
+  /** How many Macs the relay keeps a record of. */
+  get size(): number {
+    return this.records.size;
+  }
+
   all(): DaemonRecord[] {
     return [...this.records.values()];
   }
