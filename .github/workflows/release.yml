@@ -35,10 +35,17 @@ jobs:
         with:
           node-version: 22
 
-      # The version to release always has its CHANGELOG.md section: a section written by hand is kept; else one line
-      # per commit subject since the previous tag (no merges, none of this job's own commits).
+      - name: The release-notes writer (Claude; without it, the commit subjects)
+        run: curl -fsSL https://raw.githubusercontent.com/holdgrenade/.github/main/release-notes/release-notes.mjs -o "$RUNNER_TEMP/release-notes.mjs" || echo "No release-notes writer, so the notes are the commit subjects"
+
+      # The version to release always has its CHANGELOG.md section: a section written by hand is kept; else
+      # Claude's notes on the commits since the previous tag, or their subjects without a key (no merges, none of
+      # this job's own commits).
       - name: The next patch and its CHANGELOG section, unless this version is new
         id: bump
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          RELEASE_NOTES_READER: people who host their own Grenade relay
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -55,7 +62,7 @@ jobs:
               message="$(version)"
             fi
             if ! has_section "$(version)"; then
-              git log ${prev:+"$prev..HEAD"} --no-merges --format='%an%x09%s' | awk -F'\t' '$1 != "github-actions[bot]" { print "- " $2 }' > "$lines"
+              node "$RUNNER_TEMP/release-notes.mjs" "$prev" > "$lines" || git log ${prev:+"$prev..HEAD"} --no-merges --format='%an%x09%s' | awk -F'\t' '$1 != "github-actions[bot]" { print "- " $2 }' > "$lines"
               [ -s "$lines" ] || echo "- No change of its own." > "$lines"
               VERSION=$(version) LINES="$lines" node -e '
                 const fs = require("fs");
