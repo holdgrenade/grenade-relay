@@ -47,7 +47,7 @@ docker compose up -d # with .env from .env.example
 
 ## Versions and releases
 
-`version` in `package.json` is the relay's version (`/health` and the startup log show it). Every change bumps it in the same commit (patch for fixes, minor for features). On a push to `main`, `.github/workflows/release.yml` type-checks, tests and builds; when the version has no tag yet it tags `v<version>` and makes a GitHub release with generated notes. A push without a bump only runs the checks. A release does not deploy the main relay: deploying it is a step of its own.
+`version` in `package.json` is the relay's version (`/health` and the startup log show it). Every push to `main` is a release, and CI bumps the version: don't bump it by hand for a fix. `.github/workflows/release.yml` first runs its `bump` job: when the pushed version is tagged already, it commits the next patch to `main` (a commit named just the version, by github-actions); a commit that sets a new version itself (a minor for a feature) keeps it. Then it type-checks, tests and builds that commit, tags `v<version>` and makes a GitHub release with generated notes. So `main` on GitHub is one commit ahead of yours after every push: pull before you commit again (`git pull --rebase origin main`). A release does not deploy the main relay: deploying it is a step of its own.
 
 **A fix for a hole is deployed before it is pushed.** This repo is public, so a pushed fix shows everyone how to hit the main relay until it runs there. For a security fix: deploy the main relay first, check its `/health`, then push to `origin`.
 

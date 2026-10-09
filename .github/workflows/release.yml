@@ -1,5 +1,5 @@
-# Releases the relay when a push to main carries a version that has no tag yet.
-# Bumping `version` in package.json is the release switch; a push without a bump only runs the tests.
+# Releases the relay on every push to main. A push that did not bump `version` in package.json gets the next patch
+# from the `bump` job, committed back to main; a push that bumped it releases its own number.
 #
 # A release is the tag v<version> and a GitHub release. It does not deploy: deploying the main relay is a step
 # of its own (CLAUDE.md "Main instance").
@@ -17,10 +17,49 @@ permissions:
 concurrency: release
 
 jobs:
+  # Every push releases. A push whose version is tagged already did not bump it, so this job takes the next patch and
+  # commits it back to main ("1.2.2"); a push that bumped the version itself (a minor, say) keeps its number. The job
+  # below builds the commit this job hands on. Its push uses GITHUB_TOKEN, which starts no workflow, so it never loops.
+  bump:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.bump.outputs.sha }}
+    steps:
+      - name: Check out main as it is now
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: The next patch, unless this version is new
+        id: bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          version() { node -p "require('./package.json').version"; }
+          tagged() { git ls-remote --exit-code --tags origin "refs/tags/v$1" >/dev/null; }
+          # Three tries: a push that lands while this runs moves main, and the bump goes on top of it.
+          for attempt in 1 2 3; do
+            if ! tagged "$(version)"; then break; fi
+            npm version patch --no-git-tag-version >/dev/null
+            git commit --quiet --all -m "$(version)"
+            if git push --quiet origin HEAD:main; then break; fi
+            git fetch --quiet origin main && git reset --quiet --hard origin/main
+            if [ "$attempt" = 3 ]; then echo "main kept moving; push again to release" && exit 1; fi
+          done
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Releasing $(version) from $(git rev-parse --short HEAD)"
+
   release:
+    needs: bump
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.bump.outputs.sha }}
 
       - uses: actions/setup-node@v4
         with:
